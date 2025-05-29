@@ -1,43 +1,51 @@
--- Fresh schema with proper NULL support for personal expenses
+-- Complete FinPals Database Schema
+-- This creates all tables, indexes, and constraints in one clean migration
 
--- Users table
+-- Drop existing tables (in correct order due to foreign keys)
+DROP TABLE IF EXISTS expense_splits;
+DROP TABLE IF EXISTS expenses;
+DROP TABLE IF EXISTS settlements;
+DROP TABLE IF EXISTS budgets;
+DROP TABLE IF EXISTS trips;
+DROP TABLE IF EXISTS group_members;
+DROP TABLE IF EXISTS groups;
+DROP TABLE IF EXISTS users;
+DROP TABLE IF EXISTS category_mappings;
+
+-- Create users table
 CREATE TABLE users (
     telegram_id TEXT PRIMARY KEY,
     username TEXT,
     first_name TEXT,
-    timezone TEXT DEFAULT 'UTC',
-    preferred_currency TEXT DEFAULT 'USD',
-    premium_until DATETIME,
+    last_name TEXT,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
--- Groups table
+-- Create groups table
 CREATE TABLE groups (
     telegram_id TEXT PRIMARY KEY,
-    title TEXT,
-    default_currency TEXT DEFAULT 'USD',
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    active BOOLEAN DEFAULT TRUE
+    name TEXT NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
--- Group members junction table
+-- Create group_members table
 CREATE TABLE group_members (
-    group_id TEXT,
-    user_id TEXT,
-    joined_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    group_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
     active BOOLEAN DEFAULT TRUE,
+    joined_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (group_id, user_id),
     FOREIGN KEY (group_id) REFERENCES groups(telegram_id),
     FOREIGN KEY (user_id) REFERENCES users(telegram_id)
 );
 
--- Trips table
+-- Create trips table
 CREATE TABLE trips (
     id TEXT PRIMARY KEY,
     group_id TEXT NOT NULL,
     name TEXT NOT NULL,
     description TEXT,
-    status TEXT DEFAULT 'active', -- active, ended
+    status TEXT DEFAULT 'active',
     created_by TEXT NOT NULL,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     ended_at DATETIME,
@@ -45,73 +53,50 @@ CREATE TABLE trips (
     FOREIGN KEY (created_by) REFERENCES users(telegram_id)
 );
 
--- Expenses table with nullable group_id
+-- Create expenses table with nullable group_id for personal expenses
 CREATE TABLE expenses (
     id TEXT PRIMARY KEY,
-    group_id TEXT, -- NULL for personal expenses
+    group_id TEXT,  -- NULL for personal expenses
     trip_id TEXT,
     amount REAL NOT NULL,
-    currency TEXT DEFAULT 'USD',
-    description TEXT,
+    description TEXT NOT NULL,
     category TEXT,
     paid_by TEXT NOT NULL,
     created_by TEXT NOT NULL,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     deleted BOOLEAN DEFAULT FALSE,
-    is_personal BOOLEAN DEFAULT FALSE, -- TRUE for personal expenses
+    is_personal BOOLEAN DEFAULT FALSE,
     FOREIGN KEY (group_id) REFERENCES groups(telegram_id),
     FOREIGN KEY (trip_id) REFERENCES trips(id),
     FOREIGN KEY (paid_by) REFERENCES users(telegram_id),
     FOREIGN KEY (created_by) REFERENCES users(telegram_id)
 );
 
--- Expense participants
+-- Create expense_splits table
 CREATE TABLE expense_splits (
-    expense_id TEXT,
-    user_id TEXT,
+    expense_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
     amount REAL NOT NULL,
     PRIMARY KEY (expense_id, user_id),
     FOREIGN KEY (expense_id) REFERENCES expenses(id),
     FOREIGN KEY (user_id) REFERENCES users(telegram_id)
 );
 
--- Settlements
+-- Create settlements table
 CREATE TABLE settlements (
     id TEXT PRIMARY KEY,
-    group_id TEXT, -- NULL for personal settlements
-    trip_id TEXT,
+    group_id TEXT NOT NULL,
     from_user TEXT NOT NULL,
     to_user TEXT NOT NULL,
     amount REAL NOT NULL,
-    currency TEXT DEFAULT 'USD',
-    created_by TEXT NOT NULL,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    is_personal BOOLEAN DEFAULT FALSE, -- TRUE for personal settlements
     FOREIGN KEY (group_id) REFERENCES groups(telegram_id),
-    FOREIGN KEY (trip_id) REFERENCES trips(id),
     FOREIGN KEY (from_user) REFERENCES users(telegram_id),
     FOREIGN KEY (to_user) REFERENCES users(telegram_id)
 );
 
--- User preferences
-CREATE TABLE user_preferences (
-    user_id TEXT PRIMARY KEY,
-    notifications BOOLEAN DEFAULT TRUE,
-    weekly_summary BOOLEAN DEFAULT TRUE,
-    auto_remind BOOLEAN DEFAULT FALSE,
-    reminder_days INTEGER DEFAULT 7,
-    FOREIGN KEY (user_id) REFERENCES users(telegram_id)
-);
-
--- Categories for AI training
-CREATE TABLE category_mappings (
-    description_pattern TEXT PRIMARY KEY,
-    category TEXT NOT NULL,
-    confidence REAL DEFAULT 1.0,
-    usage_count INTEGER DEFAULT 1
-);
-
--- Budgets table for personal expense tracking
+-- Create budgets table
 CREATE TABLE budgets (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id TEXT NOT NULL,
@@ -122,6 +107,19 @@ CREATE TABLE budgets (
     FOREIGN KEY (user_id) REFERENCES users(telegram_id),
     UNIQUE(user_id, category)
 );
+
+-- Create category_mappings table
+CREATE TABLE category_mappings (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    original_text TEXT NOT NULL,
+    mapped_category TEXT NOT NULL,
+    confidence REAL DEFAULT 0.8,
+    usage_count INTEGER DEFAULT 1,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(original_text)
+);
+
+-- Create all performance indexes
 
 -- Basic operation indexes
 CREATE INDEX idx_expenses_group ON expenses(group_id, deleted);

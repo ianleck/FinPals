@@ -1,10 +1,11 @@
 import { Context } from 'grammy';
 import { ERROR_MESSAGES } from '../utils/constants';
+import { reply } from '../utils/reply';
 
 export async function handleSettle(ctx: Context, db: D1Database) {
 	// Only work in group chats
 	if (ctx.chat?.type === 'private') {
-		await ctx.reply('⚠️ This command only works in group chats. Add me to a group first!');
+		await reply(ctx, '⚠️ This command only works in group chats. Add me to a group first!');
 		return;
 	}
 
@@ -12,7 +13,7 @@ export async function handleSettle(ctx: Context, db: D1Database) {
 	const args = message.split(' ').slice(1); // Remove the /settle command
 
 	if (args.length < 2) {
-		await ctx.reply(
+		await reply(ctx, 
 			'❌ Invalid format!\n\n' +
 			'Usage: /settle @username [amount]\n' +
 			'Example: /settle @john 25.50\n\n' +
@@ -25,13 +26,13 @@ export async function handleSettle(ctx: Context, db: D1Database) {
 	// Parse mention and amount
 	const mention = args[0];
 	if (!mention.startsWith('@')) {
-		await ctx.reply('❌ Please mention the user you\'re settling with (@username)');
+		await reply(ctx, '❌ Please mention the user you\'re settling with (@username)');
 		return;
 	}
 
 	const amount = parseFloat(args[1]);
 	if (isNaN(amount) || amount <= 0) {
-		await ctx.reply(ERROR_MESSAGES.INVALID_AMOUNT);
+		await reply(ctx, ERROR_MESSAGES.INVALID_AMOUNT);
 		return;
 	}
 
@@ -52,7 +53,7 @@ export async function handleSettle(ctx: Context, db: D1Database) {
 		`).bind(groupId, mention.substring(1)).first();
 
 		if (!groupMembers) {
-			await ctx.reply(
+			await reply(ctx, 
 				`❌ User ${mention} not found in this group.\n\n` +
 				'Make sure they have used the bot at least once.',
 				{ parse_mode: 'HTML' }
@@ -123,7 +124,7 @@ export async function handleSettle(ctx: Context, db: D1Database) {
 			balanceMessage = `Remaining: @${fromUsername} owes @${toUsername} $${Math.abs(newBalance).toFixed(2)}`;
 		}
 
-		await ctx.reply(
+		await reply(ctx, 
 			`💰 <b>Settlement Recorded</b>\n\n` +
 			`@${fromUsername} paid @${toUsername}: <b>$${amount.toFixed(2)}</b>\n\n` +
 			balanceMessage,
@@ -154,6 +155,6 @@ export async function handleSettle(ctx: Context, db: D1Database) {
 		}
 	} catch (error) {
 		console.error('Error recording settlement:', error);
-		await ctx.reply(ERROR_MESSAGES.DATABASE_ERROR);
+		await reply(ctx, ERROR_MESSAGES.DATABASE_ERROR);
 	}
 }

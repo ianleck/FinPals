@@ -5,7 +5,16 @@
       "Bash(npm run typecheck:*)",
       "Bash(npx tsc:*)",
       "Bash(grep:*)",
-      "Bash(sed:*)"
+      "Bash(sed:*)",
+      "Bash(npm outdated)",
+      "Bash(npm run lint)",
+      "Bash(mkdir:*)",
+      "Bash(npx wrangler d1 execute:*)",
+      "Bash(cp:*)",
+      "mcp__ide__getDiagnostics",
+      "Bash(cat:*)",
+      "Bash(ls:*)",
+      "Bash(find:*)"
     ],
     "deny": []
   }

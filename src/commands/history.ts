@@ -1,13 +1,16 @@
 import { Context } from 'grammy';
 
 export async function handleHistory(ctx: Context, db: D1Database) {
-	// Only work in group chats
-	if (ctx.chat?.type === 'private') {
-		await ctx.reply('⚠️ This command only works in group chats. Add me to a group first!');
+	const isPersonal = ctx.chat?.type === 'private';
+	const userId = ctx.from?.id.toString();
+	
+	if (isPersonal) {
+		// Show personal transaction history
+		await handlePersonalHistory(ctx, db, userId!);
 		return;
 	}
 
-	const groupId = ctx.chat.id.toString();
+	const groupId = ctx.chat!.id.toString();
 
 	try {
 		// Get recent transactions (expenses and settlements)
@@ -97,6 +100,59 @@ export async function handleHistory(ctx: Context, db: D1Database) {
 		});
 	} catch (error) {
 		console.error('Error getting history:', error);
+		await ctx.reply('❌ Error retrieving transaction history. Please try again.');
+	}
+}
+
+// Handle personal transaction history
+async function handlePersonalHistory(ctx: Context, db: D1Database, userId: string) {
+	try {
+		// Get recent personal expenses
+		const recentTransactions = await db.prepare(`
+			SELECT 
+				e.id,
+				e.amount,
+				e.currency,
+				e.description,
+				e.category,
+				e.created_at
+			FROM expenses e
+			WHERE e.paid_by = ? AND e.is_personal = TRUE AND e.deleted = FALSE
+			ORDER BY e.created_at DESC
+			LIMIT 20
+		`).bind(userId).all();
+
+		if (!recentTransactions.results || recentTransactions.results.length === 0) {
+			await ctx.reply(
+				'📭 <b>No Transaction History</b>\n\n' +
+				'Start tracking personal expenses with:\n' +
+				'<code>/add [amount] [description]</code>',
+				{ parse_mode: 'HTML' }
+			);
+			return;
+		}
+
+		let message = '📜 <b>Personal Transaction History</b>\n\n';
+		
+		for (const tx of recentTransactions.results) {
+			const date = new Date(tx.created_at as string).toLocaleDateString();
+			const category = tx.category ? `[${tx.category}]` : '';
+			
+			message += `💵 <b>${date}</b> - ${tx.description} ${category}\n`;
+			message += `   $${(tx.amount as number).toFixed(2)}\n\n`;
+		}
+
+		await ctx.reply(message, {
+			parse_mode: 'HTML',
+			reply_markup: {
+				inline_keyboard: [
+					[{ text: '📊 View Balance', callback_data: 'view_balance' }],
+					[{ text: '💵 Add Expense', callback_data: 'add_expense_help' }]
+				]
+			}
+		});
+	} catch (error) {
+		console.error('Error getting personal history:', error);
 		await ctx.reply('❌ Error retrieving transaction history. Please try again.');
 	}
 }

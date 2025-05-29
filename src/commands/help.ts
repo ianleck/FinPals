@@ -2,7 +2,45 @@ import { Context } from 'grammy';
 import { COMMANDS } from '../utils/constants';
 
 export async function handleHelp(ctx: Context) {
-	const helpMessage = `
+	const isPrivate = ctx.chat?.type === 'private';
+	
+	let helpMessage = '';
+	
+	if (isPrivate) {
+		helpMessage = `
+📚 <b>FinPals - Personal Expense Tracking</b>
+
+<b>💵 Track Personal Expenses:</b>
+/${COMMANDS.ADD} <code>[amount] [description]</code>
+Track personal expenses privately
+<i>Examples:</i>
+• <code>/add 50 groceries</code>
+• <code>/add 30.50 coffee</code>
+• <code>/add 120 dinner with friends</code>
+
+/${COMMANDS.EXPENSES} - Browse your expenses
+/${COMMANDS.BALANCE} - View spending summary
+/${COMMANDS.HISTORY} - Recent transactions
+/${COMMANDS.SUMMARY} <code>[month]</code> - Monthly summary
+
+<b>💰 Budget Management:</b>
+/${COMMANDS.BUDGET} - Manage personal budgets
+• Set monthly/weekly budgets by category
+• Get alerts when approaching limits
+• Track spending against budgets
+
+<b>📊 Analytics:</b>
+/${COMMANDS.PERSONAL} - Cross-group expense summary
+• See expenses from all groups you're in
+• Understand your total spending patterns
+
+<b>💡 Tips:</b>
+• Expenses are private to you only
+• Auto-categorization learns from your habits
+• Use /personal to see group expenses too
+		`;
+	} else {
+		helpMessage = `
 📚 <b>FinPals Commands</b>
 
 <b>💵 Expense Management:</b>
@@ -32,16 +70,19 @@ Add expense with even or custom splits
 /${COMMANDS.STATS} - Group statistics
 /${COMMANDS.SUMMARY} <code>[month]</code> - Monthly summary
 /${COMMANDS.EXPORT} - Export to CSV
-/${COMMANDS.PERSONAL} - Your cross-group summary (DM only)
+
+<b>🤖 Private Chat Features:</b>
+• DM me to track personal expenses
+• Set budgets and spending limits
+• View cross-group summaries with /personal
 
 <b>💡 Tips:</b>
 • Custom splits: @user=amount
 • Auto-categorization learns from you
 • Members need to message once to be tracked
 • I'll DM people when they're added to expenses
-
-Need help? Contact @FinPalsSupport
-	`;
+		`;
+	}
 
 	await ctx.reply(helpMessage, {
 		parse_mode: 'HTML',

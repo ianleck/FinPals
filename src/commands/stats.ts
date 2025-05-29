@@ -7,8 +7,8 @@ export async function handleStats(ctx: Context, db: D1Database) {
 		return;
 	}
 
-	const groupId = ctx.chat.id.toString();
-	const groupName = ctx.chat.title || 'This Group';
+	const groupId = ctx.chat!.id.toString();
+	const groupName = ctx.chat!.title || 'This Group';
 
 	try {
 		// Get various statistics
@@ -60,8 +60,8 @@ export async function handleStats(ctx: Context, db: D1Database) {
 
 		// Format the statistics message
 		const totalExpenses = stats?.total_expenses || 0;
-		const totalAmount = stats?.total_amount || 0;
-		const totalSettled = settlements?.total_settled || 0;
+		const totalAmount = Number(stats?.total_amount) || 0;
+		const totalSettled = Number(settlements?.total_settled) || 0;
 		const firstDate = stats?.first_expense_date ? new Date(stats.first_expense_date as string).toLocaleDateString() : 'N/A';
 
 		let message = `📊 <b>Statistics for ${groupName}</b>\n\n`;

@@ -9,16 +9,24 @@ export async function handleStart(ctx: Context) {
 		// Private chat welcome
 		await ctx.reply(
 			`👋 Welcome ${username}!\n\n` +
-				`I'm FinPals - your expense splitting assistant for Telegram groups.\n\n` +
-				`To get started:\n` +
-				`1️⃣ Add me to your group chat\n` +
-				`2️⃣ Make me an admin (so I can read messages)\n` +
-				`3️⃣ Start tracking expenses!\n\n` +
-				`Use /help to see all available commands.`,
+				`I'm FinPals - your personal finance companion!\n\n` +
+				`<b>🏠 In Private Chat:</b>\n` +
+				`• Track personal expenses\n` +
+				`• Set budgets by category\n` +
+				`• View spending analytics\n` +
+				`• See summaries across all groups\n\n` +
+				`<b>👥 In Group Chat:</b>\n` +
+				`• Split expenses with friends\n` +
+				`• Track who owes whom\n` +
+				`• Manage trips and events\n` +
+				`• Export group reports\n\n` +
+				`Start with /add to track a personal expense!`,
 			{
 				parse_mode: 'HTML',
 				reply_markup: {
 					inline_keyboard: [
+						[{ text: '💵 Add Personal Expense', callback_data: 'add_expense_help' }],
+						[{ text: '💰 Set Budget', callback_data: 'budget_help' }],
 						[{ text: '➕ Add to Group', url: 'https://t.me/FinPalsBot?startgroup=true' }],
 						[{ text: '❓ Help', callback_data: 'help' }],
 					],

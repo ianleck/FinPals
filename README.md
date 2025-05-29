@@ -93,12 +93,31 @@ Without "Delete messages" permission, the bot cannot clean up command messages.
 - End trips to see summary
 
 ### Command List
-- `/add [amount] [description] [@mentions]` - Add expense
-- `/balance` - Show who owes whom
+
+**Group Commands:**
+- `/add [amount] [description] [@mentions]` - Add expense with smart categorization
+- `/balance` - Show who owes whom (trip-aware)
 - `/settle @user [amount]` - Record payment
-- `/expenses` - Browse all expenses
-- `/trip` - Manage trips
+- `/expenses` - Browse all expenses with pagination
+- `/trip` - Manage trips for organized tracking
+- `/trips` - List all trips
+- `/stats` - Group statistics with insights
+- `/summary` - Monthly expense breakdown
+- `/export` - Export data as CSV
 - `/help` - Show all commands
+
+**Private Chat Commands:**
+- `/budget` - Set and track personal budgets
+- `/personal` - View cross-group summary
+- `/start` - Get started with bot
+
+**Features:**
+- 🧠 Smart categorization with emoji detection
+- ⏰ Time-based insights
+- 🏝 Trip management for events
+- 💵 Multi-currency support (coming soon)
+- 📊 Budget tracking in private chat
+- 🔔 DM notifications for expenses
 
 ## Troubleshooting
 

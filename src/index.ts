@@ -17,6 +17,7 @@ import { handlePersonal } from './commands/personal';
 import { handleTrip } from './commands/trip';
 import { handleTrips } from './commands/trips';
 import { handleTest } from './commands/test';
+import { handleBudget } from './commands/budget';
 import { trackGroupMetadata } from './utils/group-tracker';
 import type { SessionData } from './utils/session';
 import { COMMANDS, EXPENSE_CATEGORIES } from './utils/constants';
@@ -78,6 +79,7 @@ const worker = {
 					{ command: COMMANDS.CATEGORY, description: 'Update expense category' },
 					{ command: COMMANDS.EXPORT, description: 'Export data as CSV' },
 					{ command: COMMANDS.SUMMARY, description: 'View monthly summary' },
+					{ command: COMMANDS.BUDGET, description: 'Manage personal budgets (DM only)' },
 					{ command: COMMANDS.HELP, description: 'Show all available commands' },
 				];
 
@@ -90,6 +92,8 @@ const worker = {
 				await bot.api.setMyCommands(
 					[
 						{ command: COMMANDS.START, description: 'Get started with FinPals' },
+						{ command: COMMANDS.BUDGET, description: 'Manage personal budgets' },
+						{ command: COMMANDS.PERSONAL, description: 'View cross-group summary' },
 						{ command: COMMANDS.HELP, description: 'Show available commands' },
 					],
 					{
@@ -160,6 +164,7 @@ const worker = {
 			bot.command(COMMANDS.PERSONAL, (ctx) => handlePersonal(ctx, env.DB));
 			bot.command(COMMANDS.TRIP, (ctx) => handleTrip(ctx, env.DB));
 			bot.command(COMMANDS.TRIPS, (ctx) => handleTrips(ctx, env.DB));
+			bot.command(COMMANDS.BUDGET, (ctx) => handleBudget(ctx, env.DB));
 			bot.command(COMMANDS.HELP, handleHelp);
 			bot.command('test', (ctx) => handleTest(ctx));
 
@@ -170,14 +175,46 @@ const worker = {
 			bot.callbackQuery('help', handleHelp);
 			bot.callbackQuery('add_expense_help', async (ctx) => {
 				await ctx.answerCallbackQuery();
+				const isPrivate = ctx.chat?.type === 'private';
+				
+				if (isPrivate) {
+					await ctx.reply(
+						'💵 <b>Adding Personal Expenses</b>\n\n' +
+							'Use: <code>/add [amount] [description]</code>\n\n' +
+							'Examples:\n' +
+							'• <code>/add 50 groceries</code> - Track grocery expense\n' +
+							'• <code>/add 30.50 coffee</code> - Track coffee expense\n' +
+							'• <code>/add 120 dinner out</code> - Track restaurant expense\n\n' +
+							'Expenses are private and only visible to you. They will be automatically categorized!',
+						{ parse_mode: 'HTML' }
+					);
+				} else {
+					await ctx.reply(
+						'💵 <b>Adding Expenses</b>\n\n' +
+							'Use: <code>/add [amount] [description] [@mentions]</code>\n\n' +
+							'Examples:\n' +
+							'• <code>/add 50 dinner</code> - Split $50 dinner with everyone\n' +
+							'• <code>/add 120 uber @john @sarah</code> - Split $120 uber with John and Sarah\n' +
+							'• <code>/add 30.50 coffee @mike</code> - Split $30.50 coffee with Mike\n\n' +
+							"If you don't mention anyone, the expense will be split between all active group members.",
+						{ parse_mode: 'HTML' }
+					);
+				}
+			});
+
+			bot.callbackQuery('budget_help', async (ctx) => {
+				await ctx.answerCallbackQuery();
 				await ctx.reply(
-					'💵 <b>Adding Expenses</b>\n\n' +
-						'Use: <code>/add [amount] [description] [@mentions]</code>\n\n' +
-						'Examples:\n' +
-						'• <code>/add 50 dinner</code> - Split $50 dinner with everyone\n' +
-						'• <code>/add 120 uber @john @sarah</code> - Split $120 uber with John and Sarah\n' +
-						'• <code>/add 30.50 coffee @mike</code> - Split $30.50 coffee with Mike\n\n' +
-						"If you don't mention anyone, the expense will be split between all active group members.",
+					'💰 <b>Budget Management</b>\n\n' +
+						'Use: <code>/budget</code> to manage your budgets\n\n' +
+						'<b>Set a budget:</b>\n' +
+						'<code>/budget set "Food & Dining" 500 monthly</code>\n' +
+						'<code>/budget set "Transportation" 100 weekly</code>\n\n' +
+						'<b>View budgets:</b>\n' +
+						'<code>/budget view</code>\n\n' +
+						'<b>Delete a budget:</b>\n' +
+						'<code>/budget delete "Food & Dining"</code>\n\n' +
+						'You\'ll get alerts when approaching budget limits!',
 					{ parse_mode: 'HTML' }
 				);
 			});
@@ -197,6 +234,11 @@ const worker = {
 				await handleExpenses(ctx, env.DB);
 			});
 
+			bot.callbackQuery('view_personal_expenses', async (ctx) => {
+				await ctx.answerCallbackQuery();
+				await handleExpenses(ctx, env.DB);
+			});
+
 			bot.callbackQuery('view_stats', async (ctx) => {
 				await ctx.answerCallbackQuery();
 				await handleStats(ctx, env.DB);
@@ -205,6 +247,11 @@ const worker = {
 			bot.callbackQuery('export_csv', async (ctx) => {
 				await ctx.answerCallbackQuery();
 				await handleExport(ctx, env.DB);
+			});
+
+			bot.callbackQuery('personal_monthly', async (ctx) => {
+				await ctx.answerCallbackQuery();
+				await handleSummary(ctx, env.DB);
 			});
 
 			bot.callbackQuery('settle_help', async (ctx) => {
@@ -265,6 +312,35 @@ const worker = {
 			// Handle expense selection
 			bot.callbackQuery(/^exp_select:/, async (ctx) => {
 				await handleExpenseSelection(ctx, env.DB);
+			});
+
+			// Handle personal expense page navigation
+			bot.callbackQuery(/^personal_exp_page:/, async (ctx) => {
+				const page = parseInt(ctx.callbackQuery.data.split(':')[1]);
+				const userId = ctx.from?.id.toString();
+
+				try {
+					// Get all personal expenses
+					const expenses = await env.DB.prepare(`
+						SELECT 
+							e.id,
+							e.amount,
+							e.currency,
+							e.description,
+							e.category,
+							e.created_at
+						FROM expenses e
+						WHERE e.paid_by = ? AND e.is_personal = TRUE AND e.deleted = FALSE
+						ORDER BY e.created_at DESC
+					`).bind(userId).all();
+
+					await ctx.answerCallbackQuery();
+					const { showPersonalExpensesPage } = await import('./commands/expenses');
+					await showPersonalExpensesPage(ctx, expenses.results || [], page, env.DB);
+				} catch (error) {
+					console.error('Error navigating personal expenses:', error);
+					await ctx.answerCallbackQuery('Error loading expenses');
+				}
 			});
 
 			// Handle close button
@@ -351,7 +427,7 @@ const worker = {
 					const isCreator = expense.created_by === userId;
 					let isAdmin = false;
 					try {
-						const member = await ctx.getChatMember(userId);
+						const member = await ctx.getChatMember(parseInt(userId));
 						isAdmin = member.status === 'administrator' || member.status === 'creator';
 					} catch {
 						// Ignore permission check errors

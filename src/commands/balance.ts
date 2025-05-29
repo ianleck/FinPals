@@ -1,4 +1,5 @@
 import { Context } from 'grammy';
+import { reply } from '../utils/reply';
 
 interface BalanceResult {
 	user1: string;
@@ -11,9 +12,12 @@ interface BalanceResult {
 }
 
 export async function handleBalance(ctx: Context, db: D1Database, tripId?: string) {
-	// Only work in group chats
-	if (ctx.chat?.type === 'private') {
-		await ctx.reply('⚠️ This command only works in group chats. Add me to a group first!');
+	const isPersonal = ctx.chat?.type === 'private';
+	const userId = ctx.from?.id.toString();
+	
+	if (isPersonal) {
+		// Show personal expense balance
+		await handlePersonalBalance(ctx, db, userId!);
 		return;
 	}
 
@@ -173,7 +177,7 @@ export async function handleBalance(ctx: Context, db: D1Database, tripId?: strin
 			}
 			emptyMessage += 'Start tracking expenses with /add';
 
-			await ctx.reply(emptyMessage, { parse_mode: 'HTML' });
+			await reply(ctx, emptyMessage, { parse_mode: 'HTML' });
 			return;
 		}
 
@@ -200,7 +204,7 @@ export async function handleBalance(ctx: Context, db: D1Database, tripId?: strin
 
 		message += `\n💵 Total unsettled: <b>$${(totalUnsettled / 2).toFixed(2)}</b>`;
 
-		await ctx.reply(message, {
+		await reply(ctx, message, {
 			parse_mode: 'HTML',
 			reply_markup: {
 				inline_keyboard: [
@@ -211,6 +215,93 @@ export async function handleBalance(ctx: Context, db: D1Database, tripId?: strin
 		});
 	} catch (error) {
 		console.error('Error calculating balances:', error);
-		await ctx.reply('❌ Error calculating balances. Please try again.');
+		await reply(ctx, '❌ Error calculating balances. Please try again.');
+	}
+}
+
+// New function for personal expense balance
+async function handlePersonalBalance(ctx: Context, db: D1Database, userId: string) {
+	try {
+		// Get total personal expenses (money out)
+		const expenses = await db.prepare(`
+			SELECT 
+				SUM(amount) as total_spent,
+				COUNT(*) as expense_count,
+				MAX(created_at) as last_expense
+			FROM expenses
+			WHERE paid_by = ? AND is_personal = TRUE AND deleted = FALSE
+		`).bind(userId).first();
+
+		// Get personal expenses by category
+		const byCategory = await db.prepare(`
+			SELECT 
+				COALESCE(category, 'Uncategorized') as category,
+				SUM(amount) as total,
+				COUNT(*) as count
+			FROM expenses
+			WHERE paid_by = ? AND is_personal = TRUE AND deleted = FALSE
+			GROUP BY category
+			ORDER BY total DESC
+		`).bind(userId).all();
+
+		// Get monthly totals for the last 3 months
+		const monthlyTotals = await db.prepare(`
+			SELECT 
+				strftime('%Y-%m', created_at) as month,
+				SUM(amount) as total
+			FROM expenses
+			WHERE paid_by = ? AND is_personal = TRUE AND deleted = FALSE
+				AND created_at >= datetime('now', '-3 months')
+			GROUP BY month
+			ORDER BY month DESC
+		`).bind(userId).all();
+
+		let message = '💰 <b>Personal Expense Balance</b>\n\n';
+
+		if (!expenses || expenses.expense_count === 0) {
+			message += '🆕 No personal expenses tracked yet!\n\n';
+			message += 'Start tracking with:\n';
+			message += '<code>/add [amount] [description]</code>';
+		} else {
+			const totalSpent = expenses.total_spent as number || 0;
+			const expenseCount = expenses.expense_count as number || 0;
+			const avgExpense = totalSpent / expenseCount;
+
+			message += `💸 <b>Total Spent:</b> $${totalSpent.toFixed(2)}\n`;
+			message += `📋 <b>Total Expenses:</b> ${expenseCount}\n`;
+			message += `📊 <b>Average Expense:</b> $${avgExpense.toFixed(2)}\n\n`;
+
+			if (monthlyTotals.results.length > 0) {
+				message += '📅 <b>Monthly Breakdown:</b>\n';
+				for (const month of monthlyTotals.results) {
+					const monthDate = new Date(month.month + '-01');
+					const monthName = monthDate.toLocaleDateString('en-US', { month: 'short', year: 'numeric' });
+					message += `  • ${monthName}: $${(month.total as number).toFixed(2)}\n`;
+				}
+				message += '\n';
+			}
+
+			if (byCategory.results.length > 0) {
+				message += '📂 <b>By Category:</b>\n';
+				for (const cat of byCategory.results) {
+					const percentage = ((cat.total as number / totalSpent) * 100).toFixed(1);
+					message += `  • ${cat.category}: $${(cat.total as number).toFixed(2)} (${percentage}%)\n`;
+				}
+			}
+		}
+
+		await reply(ctx, message, {
+			parse_mode: 'HTML',
+			reply_markup: {
+				inline_keyboard: [
+					[{ text: '📊 View Expenses', callback_data: 'view_personal_expenses' }],
+					[{ text: '📊 Monthly Summary', callback_data: 'personal_monthly' }],
+					[{ text: '💵 Add Expense', callback_data: 'add_expense_help' }],
+				],
+			},
+		});
+	} catch (error) {
+		console.error('Error calculating personal balance:', error);
+		await reply(ctx, '❌ Error calculating personal balance. Please try again.');
 	}
 }

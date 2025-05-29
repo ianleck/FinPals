@@ -2,10 +2,30 @@ import { Context } from 'grammy';
 import { ERROR_MESSAGES } from '../utils/constants';
 import { replyAndCleanup, MESSAGE_LIFETIMES } from '../utils/message';
 import { deleteUserMessage } from '../utils/message-cleanup';
+import { generateInsight } from '../utils/smart-insights';
+import { reply } from '../utils/reply';
 
-// Simple AI categorization based on keywords
-function suggestCategory(description: string): string | null {
+// Enhanced AI categorization with emoji detection and context
+function suggestCategory(description: string, amount?: number): string | null {
 	const lowerDesc = description.toLowerCase();
+	
+	// Check for emojis first (high confidence)
+	const emojiCategories: { [key: string]: string } = {
+		'🍕🍔🍟🌮🍜🍱🍝🥘🍳☕': 'Food & Dining',
+		'🚗🚕🚙🚌🚇✈️🛫⛽': 'Transportation',
+		'🎬🎮🎯🎪🎭🎨🎵': 'Entertainment',
+		'🛍️👗👕👖👠💄': 'Shopping',
+		'🏠💡💧📱💻🔌': 'Bills & Utilities',
+		'🏨🏖️✈️🗺️🎒': 'Travel',
+		'💊💉🏥👨‍⚕️': 'Healthcare',
+		'📚📖✏️🎓': 'Education'
+	};
+	
+	for (const [emojis, category] of Object.entries(emojiCategories)) {
+		if ([...description].some(char => emojis.includes(char))) {
+			return category;
+		}
+	}
 
 	const categoryKeywords: { [key: string]: string[] } = {
 		'Food & Dining': [
@@ -32,13 +52,47 @@ function suggestCategory(description: string): string | null {
 		Education: ['book', 'course', 'class', 'tuition', 'school', 'university'],
 	};
 
+	// Check keywords with context scoring
+	let bestMatch = { category: null as string | null, score: 0 };
+	
 	for (const [category, keywords] of Object.entries(categoryKeywords)) {
-		if (keywords.some((keyword) => lowerDesc.includes(keyword))) {
-			return category;
+		let score = 0;
+		for (const keyword of keywords) {
+			if (lowerDesc.includes(keyword)) {
+				// Exact word match scores higher
+				if (lowerDesc.split(/\s+/).includes(keyword)) {
+					score += 2;
+				} else {
+					score += 1;
+				}
+			}
+		}
+		if (score > bestMatch.score) {
+			bestMatch = { category, score };
+		}
+	}
+	
+	// Time-based intelligence
+	const hour = new Date().getHours();
+	if (!bestMatch.category && lowerDesc.length < 20) {
+		if (hour >= 6 && hour < 11) {
+			// Morning = likely breakfast/coffee
+			if (['coffee', 'breakfast', 'morning'].some(w => lowerDesc.includes(w))) {
+				return 'Food & Dining';
+			}
+		} else if (hour >= 11 && hour < 15) {
+			// Lunch time
+			if (!lowerDesc.includes('uber') && !lowerDesc.includes('taxi')) {
+				return 'Food & Dining';
+			}
+		} else if (hour >= 18 && hour < 22) {
+			// Dinner/entertainment time
+			if (amount && amount > 50) return 'Food & Dining';
+			if (amount && amount < 20) return 'Transportation';
 		}
 	}
 
-	return null;
+	return bestMatch.category;
 }
 
 // Parse custom split amounts from mentions (e.g., @john=30)
@@ -67,24 +121,29 @@ function parseCustomSplits(args: string[]): { mentions: string[]; customSplits: 
 }
 
 export async function handleAdd(ctx: Context, db: D1Database) {
-	// Only work in group chats
-	if (ctx.chat?.type === 'private') {
-		await ctx.reply('⚠️ This command only works in group chats. Add me to a group first!');
-		return;
-	}
+	const isPersonal = ctx.chat?.type === 'private';
 
 	const message = ctx.message?.text || '';
 	const args = message.split(' ').slice(1); // Remove the /add command
 
 	if (args.length < 2) {
+		const usage = isPersonal
+			? '❌ Invalid format!\n\n' +
+			  'Usage: /add [amount] [description]\n' +
+			  'Examples:\n' +
+			  '• /add 120 lunch\n' +
+			  '• /add 50 groceries\n' +
+			  '• /add 30.50 coffee'
+			: '❌ Invalid format!\n\n' +
+			  'Usage: /add [amount] [description] [@mentions]\n' +
+			  'Examples:\n' +
+			  '• /add 120 lunch - Split evenly with all\n' +
+			  '• /add 120 lunch @john @sarah - Split evenly\n' +
+			  '• /add 120 lunch @john=50 @sarah=70 - Custom amounts';
+		
 		await replyAndCleanup(
 			ctx,
-			'❌ Invalid format!\n\n' +
-				'Usage: /add [amount] [description] [@mentions]\n' +
-				'Examples:\n' +
-				'• /add 120 lunch - Split evenly with all\n' +
-				'• /add 120 lunch @john @sarah - Split evenly\n' +
-				'• /add 120 lunch @john=50 @sarah=70 - Custom amounts',
+			usage,
 			{ parse_mode: 'HTML' },
 			MESSAGE_LIFETIMES.ERROR
 		);
@@ -102,11 +161,18 @@ export async function handleAdd(ctx: Context, db: D1Database) {
 	const descriptionParts: string[] = [];
 	const mentionArgs: string[] = [];
 
-	for (let i = 1; i < args.length; i++) {
-		if (args[i].startsWith('@')) {
-			mentionArgs.push(args[i]);
-		} else if (mentionArgs.length === 0) {
+	// For personal expenses, all args after amount are description
+	if (isPersonal) {
+		for (let i = 1; i < args.length; i++) {
 			descriptionParts.push(args[i]);
+		}
+	} else {
+		for (let i = 1; i < args.length; i++) {
+			if (args[i].startsWith('@')) {
+				mentionArgs.push(args[i]);
+			} else if (mentionArgs.length === 0) {
+				descriptionParts.push(args[i]);
+			}
 		}
 	}
 
@@ -144,14 +210,19 @@ export async function handleAdd(ctx: Context, db: D1Database) {
 	try {
 		const expenseId = crypto.randomUUID();
 
-		// Get group info or create it
-		const group = await db.prepare('SELECT * FROM groups WHERE telegram_id = ?').bind(groupId).first();
+		// Get group info or create it (only for group expenses)
+		if (!isPersonal) {
+			const group = await db.prepare('SELECT * FROM groups WHERE telegram_id = ?').bind(groupId).first();
 
-		if (!group) {
-			await db
-				.prepare('INSERT INTO groups (telegram_id, title) VALUES (?, ?)')
-				.bind(groupId, ctx.chat.title || 'Group')
-				.run();
+			if (!group) {
+				await db
+					.prepare('INSERT INTO groups (telegram_id, title) VALUES (?, ?)')
+					.bind(groupId, ctx.chat!.title || 'Group')
+					.run();
+			}
+
+			// Ensure payer is in group
+			await db.prepare('INSERT OR IGNORE INTO group_members (group_id, user_id) VALUES (?, ?)').bind(groupId, paidBy).run();
 		}
 
 		// Ensure payer is in users table
@@ -160,114 +231,118 @@ export async function handleAdd(ctx: Context, db: D1Database) {
 			.bind(paidBy, ctx.from!.username || null, ctx.from!.first_name || null)
 			.run();
 
-		// Ensure payer is in group
-		await db.prepare('INSERT OR IGNORE INTO group_members (group_id, user_id) VALUES (?, ?)').bind(groupId, paidBy).run();
-
 		// Get participants based on mentions
 		let participants: Array<{ userId: string; amount?: number }> = [];
 		let warningMessage = '';
 
-		if (mentions.length === 0) {
-			// Check for recurring expense pattern
-			const similarExpenses = await db
-				.prepare(
-					`
-				SELECT es.user_id, COUNT(*) as count
-				FROM expenses e
-				JOIN expense_splits es ON e.id = es.expense_id
-				WHERE e.group_id = ? 
-					AND e.deleted = FALSE
-					AND LOWER(e.description) LIKE ?
-					AND e.created_at > datetime('now', '-30 days')
-				GROUP BY es.user_id
-				ORDER BY count DESC
-			`
-				)
-				.bind(groupId, `%${description.toLowerCase()}%`)
-				.all();
-
-			if (similarExpenses.results.length > 0) {
-				participants = similarExpenses.results.map((r) => ({ userId: r.user_id as string }));
-			} else {
-				const members = await db.prepare('SELECT user_id FROM group_members WHERE group_id = ? AND active = TRUE').bind(groupId).all();
-
-				participants = members.results.map((m) => ({ userId: m.user_id as string }));
-			}
+		if (isPersonal) {
+			// Personal expenses only have the user as participant
+			participants = [{ userId: paidBy, amount: amount }];
 		} else {
-			// Handle mentioned users with custom amounts
-			for (const userId of mentionedUserIds) {
-				const username = userIdToUsername.get(userId);
-				const customAmount = username ? customSplits.get('@' + username) : undefined;
-				participants.push({ userId, amount: customAmount });
-			}
-
-			// Try to resolve unknown mentions
-			for (const mention of unknownMentions) {
-				const username = mention.substring(1);
-				const user = await db
+			if (mentions.length === 0) {
+				// Check for recurring expense pattern
+				const similarExpenses = await db
 					.prepare(
-						'SELECT u.telegram_id FROM users u ' +
-							'JOIN group_members gm ON u.telegram_id = gm.user_id ' +
-							'WHERE gm.group_id = ? AND u.username = ? AND gm.active = TRUE'
+						`
+					SELECT es.user_id, COUNT(*) as count
+					FROM expenses e
+					JOIN expense_splits es ON e.id = es.expense_id
+					WHERE e.group_id = ? 
+						AND e.deleted = FALSE
+						AND LOWER(e.description) LIKE ?
+						AND e.created_at > datetime('now', '-30 days')
+					GROUP BY es.user_id
+					ORDER BY count DESC
+				`
 					)
-					.bind(groupId, username)
-					.first();
+					.bind(groupId, `%${description.toLowerCase()}%`)
+					.all();
 
-				if (user) {
-					const customAmount = customSplits.get(mention);
-					participants.push({ userId: user.telegram_id as string, amount: customAmount });
+				if (similarExpenses.results.length > 0) {
+					participants = similarExpenses.results.map((r) => ({ userId: r.user_id as string }));
 				} else {
-					warningMessage += `\n⚠️ ${mention} hasn't interacted with the bot yet`;
+					const members = await db.prepare('SELECT user_id FROM group_members WHERE group_id = ? AND active = TRUE').bind(groupId).all();
+
+					participants = members.results.map((m) => ({ userId: m.user_id as string }));
+				}
+			} else {
+				// Handle mentioned users with custom amounts
+				for (const userId of mentionedUserIds) {
+					const username = userIdToUsername.get(userId);
+					const customAmount = username ? customSplits.get('@' + username) : undefined;
+					participants.push({ userId, amount: customAmount });
+				}
+
+				// Try to resolve unknown mentions
+				for (const mention of unknownMentions) {
+					const username = mention.substring(1);
+					const user = await db
+						.prepare(
+							'SELECT u.telegram_id FROM users u ' +
+								'JOIN group_members gm ON u.telegram_id = gm.user_id ' +
+								'WHERE gm.group_id = ? AND u.username = ? AND gm.active = TRUE'
+						)
+						.bind(groupId, username)
+						.first();
+
+					if (user) {
+						const customAmount = customSplits.get(mention);
+						participants.push({ userId: user.telegram_id as string, amount: customAmount });
+					} else {
+						warningMessage += `\n⚠️ ${mention} hasn't interacted with the bot yet`;
+					}
+				}
+
+				// Always include the payer if not already included
+				if (!participants.some((p) => p.userId === paidBy)) {
+					participants.push({ userId: paidBy });
 				}
 			}
 
-			// Always include the payer if not already included
-			if (!participants.some((p) => p.userId === paidBy)) {
-				participants.push({ userId: paidBy });
+			if (participants.length === 0) {
+				participants = [{ userId: paidBy }];
 			}
 		}
 
-		if (participants.length === 0) {
-			participants = [{ userId: paidBy }];
-		}
+		// Validate custom splits if provided (not for personal expenses)
+		if (!isPersonal) {
+			const hasCustomSplits = participants.some((p) => p.amount !== undefined);
+			if (hasCustomSplits) {
+				const totalCustom = participants.reduce((sum, p) => sum + (p.amount || 0), 0);
+				const remainingAmount = amount - totalCustom;
 
-		// Validate custom splits if provided
-		const hasCustomSplits = participants.some((p) => p.amount !== undefined);
-		if (hasCustomSplits) {
-			const totalCustom = participants.reduce((sum, p) => sum + (p.amount || 0), 0);
-			const remainingAmount = amount - totalCustom;
+				// Check if custom amounts exceed total
+				if (totalCustom > amount) {
+					await reply(ctx, `❌ Custom split amounts ($${totalCustom.toFixed(2)}) exceed the total expense ($${amount.toFixed(2)})!`, {
+						parse_mode: 'HTML',
+					});
+					return;
+				}
 
-			// Check if custom amounts exceed total
-			if (totalCustom > amount) {
-				await ctx.reply(`❌ Custom split amounts ($${totalCustom.toFixed(2)}) exceed the total expense ($${amount.toFixed(2)})!`, {
-					parse_mode: 'HTML',
-				});
-				return;
+				// Distribute remaining amount among users without custom amounts
+				const usersWithoutCustom = participants.filter((p) => p.amount === undefined);
+				if (usersWithoutCustom.length > 0 && remainingAmount > 0) {
+					const splitAmount = remainingAmount / usersWithoutCustom.length;
+					usersWithoutCustom.forEach((p) => (p.amount = splitAmount));
+				} else if (remainingAmount > 0.01) {
+					await reply(ctx,
+						`❌ Custom splits don't add up to the total!\n` +
+							`Total: $${amount.toFixed(2)}\n` +
+							`Assigned: $${totalCustom.toFixed(2)}\n` +
+							`Remaining: $${remainingAmount.toFixed(2)}`,
+						{ parse_mode: 'HTML' }
+					);
+					return;
+				}
+			} else {
+				// Even split for all participants
+				const splitAmount = amount / participants.length;
+				participants.forEach((p) => (p.amount = splitAmount));
 			}
-
-			// Distribute remaining amount among users without custom amounts
-			const usersWithoutCustom = participants.filter((p) => p.amount === undefined);
-			if (usersWithoutCustom.length > 0 && remainingAmount > 0) {
-				const splitAmount = remainingAmount / usersWithoutCustom.length;
-				usersWithoutCustom.forEach((p) => (p.amount = splitAmount));
-			} else if (remainingAmount > 0.01) {
-				await ctx.reply(
-					`❌ Custom splits don't add up to the total!\n` +
-						`Total: $${amount.toFixed(2)}\n` +
-						`Assigned: $${totalCustom.toFixed(2)}\n` +
-						`Remaining: $${remainingAmount.toFixed(2)}`,
-					{ parse_mode: 'HTML' }
-				);
-				return;
-			}
-		} else {
-			// Even split for all participants
-			const splitAmount = amount / participants.length;
-			participants.forEach((p) => (p.amount = splitAmount));
 		}
 
 		// Auto-categorize
-		let category = suggestCategory(description);
+		let category = suggestCategory(description, amount);
 
 		if (!category) {
 			const learned = await db
@@ -280,24 +355,27 @@ export async function handleAdd(ctx: Context, db: D1Database) {
 			}
 		}
 
-		// Check for active trip
-		const activeTrip = await db
-			.prepare(
-				`
-			SELECT id, name FROM trips 
-			WHERE group_id = ? AND status = 'active'
-			LIMIT 1
-		`
-			)
-			.bind(groupId)
-			.first();
+		// Check for active trip (only for group expenses)
+		let activeTrip = null;
+		if (!isPersonal) {
+			activeTrip = await db
+				.prepare(
+					`
+				SELECT id, name FROM trips 
+				WHERE group_id = ? AND status = 'active'
+				LIMIT 1
+			`
+				)
+				.bind(groupId)
+				.first();
+		}
 
-		// Create expense with trip_id if there's an active trip
+		// Create expense
 		await db
 			.prepare(
-				'INSERT INTO expenses (id, group_id, trip_id, amount, description, category, paid_by, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+				'INSERT INTO expenses (id, group_id, trip_id, amount, description, category, paid_by, created_by, is_personal) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
 			)
-			.bind(expenseId, groupId, activeTrip?.id || null, amount, description, category, paidBy, paidBy)
+			.bind(expenseId, isPersonal ? null : groupId, activeTrip?.id || null, amount, description, category, paidBy, paidBy, isPersonal)
 			.run();
 
 		// Create splits
@@ -316,79 +394,107 @@ export async function handleAdd(ctx: Context, db: D1Database) {
 		}
 
 		// Get participant names for display
-		const participantIds = participants.map((p) => p.userId);
-		const participantNames = await db
-			.prepare(`SELECT telegram_id, username, first_name FROM users WHERE telegram_id IN (${participantIds.map(() => '?').join(',')})`)
-			.bind(...participantIds)
-			.all();
+		let participantDisplay = '';
+		if (!isPersonal) {
+			const participantIds = participants.map((p) => p.userId);
+			const participantNames = await db
+				.prepare(`SELECT telegram_id, username, first_name FROM users WHERE telegram_id IN (${participantIds.map(() => '?').join(',')})`)
+				.bind(...participantIds)
+				.all();
 
-		const participantDisplay = participantNames.results
-			.map((p) => {
-				const participant = participants.find((part) => part.userId === p.telegram_id);
-				const name = '@' + (p.username || p.first_name || 'User');
-				return participant?.amount ? `${name} ($${participant.amount.toFixed(2)})` : name;
-			})
-			.join(', ');
+			participantDisplay = participantNames.results
+				.map((p) => {
+					const participant = participants.find((part) => part.userId === p.telegram_id);
+					const name = '@' + (p.username || p.first_name || 'User');
+					return participant?.amount ? `${name} ($${participant.amount.toFixed(2)})` : name;
+				})
+				.join(', ');
+		}
 
-		// Send confirmation (delete user message, but keep bot message longer for interactive buttons)
-		await deleteUserMessage(ctx);
-		await ctx.reply(
-			`✅ <b>Expense Added</b>\n\n` +
-				`💵 Amount: <b>$${amount.toFixed(2)}</b>\n` +
-				`📝 Description: ${description}\n` +
-				`👤 Paid by: @${paidByUsername}\n` +
-				`👥 Split: ${participantDisplay}\n` +
-				(category ? `📂 Category: ${category} (auto-detected)\n` : '') +
-				(activeTrip ? `🏝 Trip: ${activeTrip.name}\n` : '') +
-				warningMessage +
-				(notifyUsers.length > 0 ? '\n\n📨 Notifying participants...' : ''),
-			{
-				parse_mode: 'HTML',
-				reply_markup: {
-					inline_keyboard: [
-						[
-							{ text: '📂 Change Category', callback_data: `cat:${expenseId}` },
-							{ text: '🗑️ Delete', callback_data: `del:${expenseId}` },
-						],
-						[
-							{ text: '📊 View Balance', callback_data: 'view_balance' },
-							{ text: '💵 Add Another', callback_data: 'add_expense_help' },
-						],
-						[{ text: '✅ Done', callback_data: 'close' }],
-					],
-				},
-			}
-		);
+		// Generate smart insight
+		const insight = generateInsight(description, amount, category, participants.length);
+
+		// Send confirmation
+		if (!isPersonal) {
+			await deleteUserMessage(ctx);
+		}
+		
+		const confirmationMessage = isPersonal
+			? `✅ <b>Personal Expense Added</b>\n\n` +
+			  `💵 Amount: <b>$${amount.toFixed(2)}</b>\n` +
+			  `📝 Description: ${description}\n` +
+			  (category ? `📂 Category: ${category} (auto-detected)\n` : '') +
+			  (insight ? `\n${insight}` : '')
+			: `✅ <b>Expense Added</b>\n\n` +
+			  `💵 Amount: <b>$${amount.toFixed(2)}</b>\n` +
+			  `📝 Description: ${description}\n` +
+			  `👤 Paid by: @${paidByUsername}\n` +
+			  `👥 Split: ${participantDisplay}\n` +
+			  (category ? `📂 Category: ${category} (auto-detected)\n` : '') +
+			  (activeTrip ? `🏝 Trip: ${activeTrip.name}\n` : '') +
+			  (insight ? `\n${insight}\n` : '') +
+			  warningMessage +
+			  (notifyUsers.length > 0 ? '\n\n📨 Notifying participants...' : '');
+
+		const keyboard = isPersonal
+			? [
+				[
+					{ text: '📂 Change Category', callback_data: `cat:${expenseId}` },
+					{ text: '🗑️ Delete', callback_data: `del:${expenseId}` },
+				],
+				[
+					{ text: '📊 View Expenses', callback_data: 'view_personal_expenses' },
+					{ text: '💵 Add Another', callback_data: 'add_expense_help' },
+				],
+				[{ text: '✅ Done', callback_data: 'close' }],
+			  ]
+			: [
+				[
+					{ text: '📂 Change Category', callback_data: `cat:${expenseId}` },
+					{ text: '🗑️ Delete', callback_data: `del:${expenseId}` },
+				],
+				[
+					{ text: '📊 View Balance', callback_data: 'view_balance' },
+					{ text: '💵 Add Another', callback_data: 'add_expense_help' },
+				],
+				[{ text: '✅ Done', callback_data: 'close' }],
+			  ];
+
+		await reply(ctx, confirmationMessage, {
+			parse_mode: 'HTML',
+			reply_markup: {
+				inline_keyboard: keyboard,
+			},
+		});
 
 		// Note: Auto-deletion of bot messages not supported in serverless environment
 		// User message has already been deleted
 
-		// Send DM notifications to participants in parallel
-		await Promise.all(
-			notifyUsers.map(async (notify) => {
-				try {
-					const user = participantNames.results.find((p) => p.telegram_id === notify.userId);
-					const userName = user?.username || user?.first_name || 'Someone';
-
-					await ctx.api.sendMessage(
-						notify.userId,
-						`💵 <b>You've been added to an expense!</b>\n\n` +
-							`Group: ${ctx.chat?.title || 'your group'}\n` +
-							`Description: ${description}\n` +
-							`Total: $${amount.toFixed(2)}\n` +
-							`Paid by: @${paidByUsername}\n` +
-							`Your share: <b>$${notify.amount.toFixed(2)}</b>\n\n` +
-							`Use /balance in the group to see all balances.`,
-						{ parse_mode: 'HTML' }
-					);
-				} catch (error) {
-					// User might have blocked the bot or never started a conversation
-					console.log(`Could not notify user ${notify.userId}:`, error);
-				}
-			})
-		);
+		// Send DM notifications to participants in parallel (only for group expenses)
+		if (!isPersonal && notifyUsers.length > 0) {
+			await Promise.all(
+				notifyUsers.map(async (notify) => {
+					try {
+						await ctx.api.sendMessage(
+							notify.userId,
+							`💵 <b>You've been added to an expense!</b>\n\n` +
+								`Group: ${ctx.chat?.title || 'your group'}\n` +
+								`Description: ${description}\n` +
+								`Total: $${amount.toFixed(2)}\n` +
+								`Paid by: @${paidByUsername}\n` +
+								`Your share: <b>$${notify.amount.toFixed(2)}</b>\n\n` +
+								`Use /balance in the group to see all balances.`,
+							{ parse_mode: 'HTML' }
+						);
+					} catch (error) {
+						// User might have blocked the bot or never started a conversation
+						console.log(`Could not notify user ${notify.userId}:`, error);
+					}
+				})
+			);
+		}
 	} catch (error) {
 		console.error('Error adding expense:', error);
-		await ctx.reply(ERROR_MESSAGES.DATABASE_ERROR);
+		await reply(ctx, ERROR_MESSAGES.DATABASE_ERROR);
 	}
 }

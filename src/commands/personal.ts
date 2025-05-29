@@ -74,9 +74,32 @@ export async function handlePersonal(ctx: Context, db: D1Database) {
 			SELECT 
 				COALESCE(category, 'Uncategorized') as category,
 				COUNT(*) as count,
+				SUM(amount) as total,
+				FALSE as is_personal
+			FROM expenses
+			WHERE created_by = ? AND deleted = FALSE AND is_personal = FALSE
+			GROUP BY category
+			ORDER BY total DESC
+		`).bind(userId).all();
+
+		// Get personal expenses summary
+		const personalExpenses = await db.prepare(`
+			SELECT 
+				COUNT(*) as expense_count,
+				SUM(amount) as total_amount,
+				AVG(amount) as avg_amount
+			FROM expenses
+			WHERE paid_by = ? AND is_personal = TRUE AND deleted = FALSE
+		`).bind(userId).first();
+
+		// Get personal expenses by category
+		const personalCategories = await db.prepare(`
+			SELECT 
+				COALESCE(category, 'Uncategorized') as category,
+				COUNT(*) as count,
 				SUM(amount) as total
 			FROM expenses
-			WHERE created_by = ? AND deleted = FALSE
+			WHERE paid_by = ? AND is_personal = TRUE AND deleted = FALSE
 			GROUP BY category
 			ORDER BY total DESC
 		`).bind(userId).all();
@@ -125,12 +148,31 @@ export async function handlePersonal(ctx: Context, db: D1Database) {
 
 		// Category breakdown
 		if (categories.results.length > 0) {
-			message += `📂 <b>Your Spending by Category:</b>\n`;
+			message += `📂 <b>Group Spending by Category:</b>\n`;
 			const totalCategorized = categories.results.reduce((sum, cat) => sum + (cat.total as number), 0);
 
 			for (const cat of categories.results) {
 				const percentage = ((cat.total as number / totalCategorized) * 100).toFixed(1);
 				message += `• ${cat.category}: $${(cat.total as number).toFixed(2)} (${percentage}%)\n`;
+			}
+			message += '\n';
+		}
+
+		// Personal expenses section
+		if (personalExpenses && (personalExpenses.expense_count as number) > 0) {
+			message += `💳 <b>Personal Expense Tracking:</b>\n`;
+			message += `• Total expenses: ${personalExpenses.expense_count}\n`;
+			message += `• Total spent: $${(personalExpenses.total_amount as number).toFixed(2)}\n`;
+			message += `• Average expense: $${(personalExpenses.avg_amount as number).toFixed(2)}\n\n`;
+
+			if (personalCategories.results.length > 0) {
+				message += `📂 <b>Personal Spending by Category:</b>\n`;
+				const totalPersonal = personalCategories.results.reduce((sum, cat) => sum + (cat.total as number), 0);
+
+				for (const cat of personalCategories.results) {
+					const percentage = ((cat.total as number / totalPersonal) * 100).toFixed(1);
+					message += `• ${cat.category}: $${(cat.total as number).toFixed(2)} (${percentage}%)\n`;
+				}
 			}
 		}
 
