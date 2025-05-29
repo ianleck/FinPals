@@ -1,11 +1,13 @@
 import { Context } from 'grammy';
 
-interface Balance {
-	from_user: string;
-	to_user: string;
+interface BalanceResult {
+	user1: string;
+	user2: string;
 	net_amount: number;
-	from_username?: string;
-	to_username?: string;
+	user1_username?: string;
+	user1_first_name?: string;
+	user2_username?: string;
+	user2_first_name?: string;
 }
 
 export async function handleBalance(ctx: Context, db: D1Database, tripId?: string) {
@@ -16,37 +18,47 @@ export async function handleBalance(ctx: Context, db: D1Database, tripId?: strin
 	}
 
 	const groupId = ctx.chat?.id.toString() || '';
-	
+
 	// Check if filtering by trip or if there's an active trip
 	let filterTripId = tripId;
 	let tripInfo = null;
-	
+
 	if (!filterTripId) {
 		// Check for active trip
-		const activeTrip = await db.prepare(`
+		const activeTrip = await db
+			.prepare(
+				`
 			SELECT id, name FROM trips 
 			WHERE group_id = ? AND status = 'active'
 			LIMIT 1
-		`).bind(groupId).first();
-		
+		`
+			)
+			.bind(groupId)
+			.first();
+
 		if (activeTrip) {
 			filterTripId = activeTrip.id as string;
 			tripInfo = activeTrip;
 		}
 	} else {
 		// Get trip info
-		tripInfo = await db.prepare(`
+		tripInfo = await db
+			.prepare(
+				`
 			SELECT id, name FROM trips 
 			WHERE id = ?
 			LIMIT 1
-		`).bind(filterTripId).first();
+		`
+			)
+			.bind(filterTripId)
+			.first();
 	}
 
 	try {
 		// Build query based on whether we're filtering by trip
 		let query: string;
 		let params: any[];
-		
+
 		if (filterTripId) {
 			// Query with trip filter
 			query = `
@@ -146,8 +158,11 @@ export async function handleBalance(ctx: Context, db: D1Database, tripId?: strin
 			`;
 			params = [groupId, groupId];
 		}
-		
-		const balances = await db.prepare(query).bind(...params).all();
+
+		const balances = await db
+			.prepare(query)
+			.bind(...params)
+			.all<BalanceResult>();
 
 		if (!balances.results || balances.results.length === 0) {
 			let emptyMessage = '✨ <b>All Settled Up!</b>\n\n';
@@ -157,7 +172,7 @@ export async function handleBalance(ctx: Context, db: D1Database, tripId?: strin
 				emptyMessage += 'No outstanding balances in this group.\n\n';
 			}
 			emptyMessage += 'Start tracking expenses with /add';
-			
+
 			await ctx.reply(emptyMessage, { parse_mode: 'HTML' });
 			return;
 		}
@@ -173,7 +188,7 @@ export async function handleBalance(ctx: Context, db: D1Database, tripId?: strin
 		for (const balance of balances.results) {
 			const user1Name = balance.user1_username || balance.user1_first_name || 'User';
 			const user2Name = balance.user2_username || balance.user2_first_name || 'User';
-			const amount = Math.abs(balance.net_amount as number);
+			const amount = Math.abs(balance.net_amount);
 			totalUnsettled += amount;
 
 			if (balance.net_amount > 0) {
@@ -190,9 +205,9 @@ export async function handleBalance(ctx: Context, db: D1Database, tripId?: strin
 			reply_markup: {
 				inline_keyboard: [
 					[{ text: '💸 Settle Up', callback_data: 'settle_help' }],
-					[{ text: '📊 View History', callback_data: 'view_history' }]
-				]
-			}
+					[{ text: '📊 View History', callback_data: 'view_history' }],
+				],
+			},
 		});
 	} catch (error) {
 		console.error('Error calculating balances:', error);
