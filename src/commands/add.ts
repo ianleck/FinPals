@@ -1,5 +1,7 @@
 import { Context } from 'grammy';
 import { ERROR_MESSAGES } from '../utils/constants';
+import { replyAndCleanup, MESSAGE_LIFETIMES } from '../utils/message';
+import { deleteUserMessage } from '../utils/message-cleanup';
 
 // Simple AI categorization based on keywords
 function suggestCategory(description: string): string | null {
@@ -61,14 +63,16 @@ export async function handleAdd(ctx: Context, db: D1Database) {
 	const args = message.split(' ').slice(1); // Remove the /add command
 
 	if (args.length < 2) {
-		await ctx.reply(
+		await replyAndCleanup(
+			ctx,
 			'❌ Invalid format!\n\n' +
 			'Usage: /add [amount] [description] [@mentions]\n' +
 			'Examples:\n' +
 			'• /add 120 lunch - Split evenly with all\n' +
 			'• /add 120 lunch @john @sarah - Split evenly\n' +
 			'• /add 120 lunch @john=50 @sarah=70 - Custom amounts',
-			{ parse_mode: 'HTML' }
+			{ parse_mode: 'HTML' },
+			MESSAGE_LIFETIMES.ERROR
 		);
 		return;
 	}
@@ -76,7 +80,7 @@ export async function handleAdd(ctx: Context, db: D1Database) {
 	// Parse amount
 	const amount = parseFloat(args[0]);
 	if (isNaN(amount) || amount <= 0) {
-		await ctx.reply(ERROR_MESSAGES.INVALID_AMOUNT);
+		await replyAndCleanup(ctx, ERROR_MESSAGES.INVALID_AMOUNT, {}, MESSAGE_LIFETIMES.ERROR);
 		return;
 	}
 
@@ -296,7 +300,8 @@ export async function handleAdd(ctx: Context, db: D1Database) {
 			return participant?.amount ? `${name} ($${participant.amount.toFixed(2)})` : name;
 		}).join(', ');
 
-		// Send confirmation
+		// Send confirmation (delete user message, but keep bot message longer for interactive buttons)
+		await deleteUserMessage(ctx);
 		await ctx.reply(
 			`✅ <b>Expense Added</b>\n\n` +
 			`💵 Amount: <b>$${amount.toFixed(2)}</b>\n` +
@@ -326,6 +331,9 @@ export async function handleAdd(ctx: Context, db: D1Database) {
 				}
 			}
 		);
+		
+		// Note: Auto-deletion of bot messages not supported in serverless environment
+		// User message has already been deleted
 
 		// Send DM notifications to participants
 		for (const notify of notifyUsers) {

@@ -16,6 +16,7 @@ import { handleSummary } from './commands/summary';
 import { handlePersonal } from './commands/personal';
 import { handleTrip } from './commands/trip';
 import { handleTrips } from './commands/trips';
+import { handleTest } from './commands/test';
 import { trackGroupMetadata } from './utils/group-tracker';
 import type { SessionData } from './utils/session';
 import { COMMANDS, EXPENSE_CATEGORIES } from './utils/constants';
@@ -160,6 +161,7 @@ const worker = {
 			bot.command(COMMANDS.TRIP, (ctx) => handleTrip(ctx, env.DB));
 			bot.command(COMMANDS.TRIPS, (ctx) => handleTrips(ctx, env.DB));
 			bot.command(COMMANDS.HELP, handleHelp);
+			bot.command('test', (ctx) => handleTest(ctx));
 
 			// Handle delete with underscore format (from expenses list)
 			bot.hears(/^\/delete_/, (ctx) => handleDelete(ctx, env.DB));

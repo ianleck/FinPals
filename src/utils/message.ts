@@ -1,4 +1,7 @@
 import { Context } from 'grammy';
+import { deleteMessageAfterDelay, MESSAGE_LIFETIMES } from './message-cleanup';
+
+export { MESSAGE_LIFETIMES } from './message-cleanup';
 
 // Helper function to get message thread ID if it exists and is supported
 export function getMessageThreadId(ctx: Context): number | undefined {
@@ -28,4 +31,28 @@ export function createReplyOptions(ctx: Context, additional: Record<string, any>
 		...(threadId ? { message_thread_id: threadId } : {}),
 		...rest,
 	};
+}
+
+// Send a reply and delete the user message (bot message deletion not supported in serverless)
+export async function replyAndCleanup(
+	ctx: Context,
+	text: string,
+	options: any = {},
+	deleteAfterMs: number = MESSAGE_LIFETIMES.INFO
+): Promise<void> {
+	try {
+		// Delete user's command message immediately
+		if (ctx.message && ctx.chat && ctx.chat.type !== 'private') {
+			ctx.api.deleteMessage(ctx.chat.id, ctx.message.message_id).catch(() => {});
+		}
+		
+		// Send reply
+		const replyOptions = createReplyOptions(ctx, options);
+		await ctx.reply(text, replyOptions);
+		
+		// Note: Auto-deletion of bot messages not supported in serverless environment
+		// Would need Cloudflare Queues or similar to implement
+	} catch (error) {
+		console.error('Error in replyAndCleanup:', error);
+	}
 }
