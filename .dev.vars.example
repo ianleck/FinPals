@@ -1,0 +1,10 @@
+ENV=dev
+
+# Rate Limiter Configuration
+RATE_LIMITER_KEY=your-api-key-here
+
+# Feature Flags
+FEATURE_ENABLE_RATE_LIMITER=true  # Set to 'true' to enable rate limiting, 'false' to disable
+
+# TON Connect Configuration
+CHECKIN_WALLET_ADDRESS=EQDDgDZ5lgs7_AbpWitunhUUSOMzp9N3BNQx8F0tcBiDuZ1a

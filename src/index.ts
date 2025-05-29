@@ -1,0 +1,592 @@
+import { Bot, Context, SessionFlavor, webhookCallback } from 'grammy';
+import { setupSession } from './utils/session';
+import type { D1Database, DurableObjectNamespace } from '@cloudflare/workers-types';
+import { handleStart } from './commands/start';
+import { handleAdd } from './commands/add';
+import { handleBalance } from './commands/balance';
+import { handleSettle } from './commands/settle';
+import { handleStats } from './commands/stats';
+import { handleHelp } from './commands/help';
+import { handleHistory } from './commands/history';
+import { handleExpenses, showExpensesPage, handleExpenseSelection } from './commands/expenses';
+import { handleDelete } from './commands/delete';
+import { handleCategory } from './commands/category';
+import { handleExport } from './commands/export';
+import { handleSummary } from './commands/summary';
+import { handlePersonal } from './commands/personal';
+import { handleTrip } from './commands/trip';
+import { handleTrips } from './commands/trips';
+import { trackGroupMetadata } from './utils/group-tracker';
+import type { SessionData } from './utils/session';
+import { COMMANDS, EXPENSE_CATEGORIES } from './utils/constants';
+
+type MyContext = Context & SessionFlavor<SessionData> & { env: Env };
+
+export interface Env {
+	BOT_TOKEN: string;
+	TELEGRAM_BOT_API_SECRET_TOKEN: string;
+	ENV: string;
+	// D1 Database
+	DB: D1Database;
+	// Durable Object namespace for grammY sessions
+	SESSIONS: DurableObjectNamespace;
+}
+
+const corsHeaders = {
+	'Access-Control-Allow-Credentials': 'true',
+	'Access-Control-Allow-Origin': '*',
+	'Access-Control-Allow-Methods': 'GET,OPTIONS,PATCH,DELETE,POST,PUT',
+	'Access-Control-Allow-Headers':
+		'X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version',
+};
+
+const worker = {
+	async fetch(request: Request, env: Env): Promise<Response> {
+		// Handle CORS preflight requests
+		if (request.method === 'OPTIONS') {
+			return new Response(null, {
+				headers: corsHeaders,
+			});
+		}
+
+		const url = new URL(request.url);
+
+		// Test endpoint for local development
+		if (url.pathname === '/test' && request.method === 'GET') {
+			return new Response('Bot is running! Set webhook to: ' + request.url.replace('/test', ''), {
+				status: 200,
+				headers: corsHeaders,
+			});
+		}
+
+		// Handle set commands endpoint
+		if (url.pathname === '/api/set-commands') {
+			try {
+				const bot = new Bot<MyContext>(env.BOT_TOKEN);
+				const commands = [
+					{ command: COMMANDS.START, description: 'Initialize bot in group or get help' },
+					{ command: COMMANDS.ADD, description: 'Add a new expense' },
+					{ command: COMMANDS.BALANCE, description: 'Show current balances' },
+					{ command: COMMANDS.SETTLE, description: 'Record a payment' },
+					{ command: COMMANDS.TRIP, description: 'Manage trips for expense tracking' },
+					{ command: COMMANDS.TRIPS, description: 'List all trips' },
+					{ command: COMMANDS.HISTORY, description: 'View recent transactions' },
+					{ command: COMMANDS.STATS, description: 'View group statistics' },
+					{ command: COMMANDS.EXPENSES, description: 'List all expenses' },
+					{ command: COMMANDS.DELETE, description: 'Delete an expense' },
+					{ command: COMMANDS.CATEGORY, description: 'Update expense category' },
+					{ command: COMMANDS.EXPORT, description: 'Export data as CSV' },
+					{ command: COMMANDS.SUMMARY, description: 'View monthly summary' },
+					{ command: COMMANDS.HELP, description: 'Show all available commands' },
+				];
+
+				// Set commands for group chats
+				await bot.api.setMyCommands(commands, {
+					scope: { type: 'all_group_chats' },
+				});
+
+				// Set commands for private chats (limited set)
+				await bot.api.setMyCommands(
+					[
+						{ command: COMMANDS.START, description: 'Get started with FinPals' },
+						{ command: COMMANDS.HELP, description: 'Show available commands' },
+					],
+					{
+						scope: { type: 'all_private_chats' },
+					}
+				);
+
+				return new Response(JSON.stringify({ success: true, message: 'Commands set successfully' }), {
+					status: 200,
+					headers: { ...corsHeaders, 'content-type': 'application/json' },
+				});
+			} catch (error: any) {
+				console.error('Error setting commands:', error);
+				return new Response(
+					JSON.stringify({
+						success: false,
+						error: error.message || 'Failed to set commands',
+					}),
+					{
+						status: 500,
+						headers: { ...corsHeaders, 'content-type': 'application/json' },
+					}
+				);
+			}
+		}
+
+		// Handle bot webhook requests (from Telegram)
+		try {
+			// Initialize bot with token
+			const bot = new Bot<MyContext>(env.BOT_TOKEN);
+
+			// Set up session middleware backed by the SessionDO durable object
+			setupSession(bot, env);
+
+			// Track group metadata for all messages in groups
+			bot.use(async (ctx, next) => {
+				ctx.env = env;
+				await trackGroupMetadata(ctx);
+				return next();
+			});
+
+			// Handle new chat members (when bot is added to group)
+			bot.on('chat_member', async (ctx) => {
+				if (ctx.chatMember.new_chat_member.status === 'member' && ctx.chatMember.new_chat_member.user.id === ctx.me.id) {
+					await handleStart(ctx);
+				}
+			});
+
+			// Handle when bot is added to a group
+			bot.on('my_chat_member', async (ctx) => {
+				if (ctx.myChatMember.new_chat_member.status === 'member' && ctx.chat.type !== 'private') {
+					await handleStart(ctx);
+				}
+			});
+
+			// Set up command handlers
+			bot.command(COMMANDS.START, handleStart);
+			bot.command(COMMANDS.ADD, (ctx) => handleAdd(ctx, env.DB));
+			bot.command(COMMANDS.BALANCE, (ctx) => handleBalance(ctx, env.DB));
+			bot.command(COMMANDS.SETTLE, (ctx) => handleSettle(ctx, env.DB));
+			bot.command(COMMANDS.HISTORY, (ctx) => handleHistory(ctx, env.DB));
+			bot.command(COMMANDS.STATS, (ctx) => handleStats(ctx, env.DB));
+			bot.command(COMMANDS.EXPENSES, (ctx) => handleExpenses(ctx, env.DB));
+			bot.command(COMMANDS.DELETE, (ctx) => handleDelete(ctx, env.DB));
+			bot.command(COMMANDS.CATEGORY, (ctx) => handleCategory(ctx, env.DB));
+			bot.command(COMMANDS.EXPORT, (ctx) => handleExport(ctx, env.DB));
+			bot.command(COMMANDS.SUMMARY, (ctx) => handleSummary(ctx, env.DB));
+			bot.command(COMMANDS.PERSONAL, (ctx) => handlePersonal(ctx, env.DB));
+			bot.command(COMMANDS.TRIP, (ctx) => handleTrip(ctx, env.DB));
+			bot.command(COMMANDS.TRIPS, (ctx) => handleTrips(ctx, env.DB));
+			bot.command(COMMANDS.HELP, handleHelp);
+
+			// Handle delete with underscore format (from expenses list)
+			bot.hears(/^\/delete_/, (ctx) => handleDelete(ctx, env.DB));
+
+			// Handle callback queries
+			bot.callbackQuery('help', handleHelp);
+			bot.callbackQuery('add_expense_help', async (ctx) => {
+				await ctx.answerCallbackQuery();
+				await ctx.reply(
+					'💵 <b>Adding Expenses</b>\n\n' +
+						'Use: <code>/add [amount] [description] [@mentions]</code>\n\n' +
+						'Examples:\n' +
+						'• <code>/add 50 dinner</code> - Split $50 dinner with everyone\n' +
+						'• <code>/add 120 uber @john @sarah</code> - Split $120 uber with John and Sarah\n' +
+						'• <code>/add 30.50 coffee @mike</code> - Split $30.50 coffee with Mike\n\n' +
+						"If you don't mention anyone, the expense will be split between all active group members.",
+					{ parse_mode: 'HTML' }
+				);
+			});
+
+			bot.callbackQuery('view_balance', async (ctx) => {
+				await ctx.answerCallbackQuery();
+				await handleBalance(ctx, env.DB);
+			});
+
+			bot.callbackQuery('view_history', async (ctx) => {
+				await ctx.answerCallbackQuery();
+				await handleHistory(ctx, env.DB);
+			});
+
+			bot.callbackQuery('view_expenses', async (ctx) => {
+				await ctx.answerCallbackQuery();
+				await handleExpenses(ctx, env.DB);
+			});
+
+			bot.callbackQuery('view_stats', async (ctx) => {
+				await ctx.answerCallbackQuery();
+				await handleStats(ctx, env.DB);
+			});
+
+			bot.callbackQuery('export_csv', async (ctx) => {
+				await ctx.answerCallbackQuery();
+				await handleExport(ctx, env.DB);
+			});
+
+			bot.callbackQuery('settle_help', async (ctx) => {
+				await ctx.answerCallbackQuery();
+				await ctx.reply(
+					'💸 <b>Recording Settlements</b>\n\n' +
+						'Use: <code>/settle @username [amount]</code>\n\n' +
+						'This records that you paid the mentioned user.\n\n' +
+						'Example: <code>/settle @john 25</code>\n' +
+						'This means you paid John $25.',
+					{ parse_mode: 'HTML' }
+				);
+			});
+
+			// Handle edit split callback (for future implementation)
+			bot.callbackQuery(/^edit_split:/, async (ctx) => {
+				await ctx.answerCallbackQuery();
+				await ctx.reply(
+					'✏️ Edit split functionality coming soon!\n\n' +
+					'For now, you can delete the expense and create a new one with the correct split.',
+					{ parse_mode: 'HTML' }
+				);
+			});
+
+			// Handle expense page navigation
+			bot.callbackQuery(/^exp_page:/, async (ctx) => {
+				const page = parseInt(ctx.callbackQuery.data.split(':')[1]);
+				const groupId = ctx.chat?.id.toString();
+
+				try {
+					// Get all expenses
+					const expenses = await env.DB.prepare(`
+						SELECT 
+							e.id,
+							e.amount,
+							e.currency,
+							e.description,
+							e.category,
+							e.created_at,
+							e.created_by,
+							u.username as payer_username,
+							u.first_name as payer_first_name,
+							(SELECT COUNT(*) FROM expense_splits WHERE expense_id = e.id) as split_count
+						FROM expenses e
+						JOIN users u ON e.paid_by = u.telegram_id
+						WHERE e.group_id = ? AND e.deleted = FALSE
+						ORDER BY e.created_at DESC
+					`).bind(groupId).all();
+
+					await ctx.answerCallbackQuery();
+					await showExpensesPage(ctx, expenses.results || [], page, env.DB);
+				} catch (error) {
+					console.error('Error navigating expenses:', error);
+					await ctx.answerCallbackQuery('Error loading expenses');
+				}
+			});
+
+			// Handle expense selection
+			bot.callbackQuery(/^exp_select:/, async (ctx) => {
+				await handleExpenseSelection(ctx, env.DB);
+			});
+
+			// Handle close button
+			bot.callbackQuery('close', async (ctx) => {
+				await ctx.answerCallbackQuery();
+				await ctx.deleteMessage();
+			});
+
+			// Handle trip-related callbacks
+			bot.callbackQuery('start_trip_help', async (ctx) => {
+				await ctx.answerCallbackQuery();
+				await ctx.reply(
+					'🏝 <b>Starting a Trip</b>\n\n' +
+					'Use: <code>/trip start [name]</code>\n\n' +
+					'Example: /trip start Weekend Getaway\n\n' +
+					'All expenses added after starting a trip will be linked to it!',
+					{ parse_mode: 'HTML' }
+				);
+			});
+
+			bot.callbackQuery('confirm_end_trip', async (ctx) => {
+				await ctx.answerCallbackQuery();
+				await ctx.reply(
+					'⚠️ <b>End Current Trip?</b>\n\n' +
+					'This will end the active trip. Future expenses won\'t be linked to it.\n\n' +
+					'Use: /trip end',
+					{ parse_mode: 'HTML' }
+				);
+			});
+
+			bot.callbackQuery(/^trip_balance_/, async (ctx) => {
+				const tripId = ctx.callbackQuery.data.split('_')[2];
+				await ctx.answerCallbackQuery();
+				await handleBalance(ctx, env.DB, tripId);
+			});
+
+			bot.callbackQuery(/^trip_summary_/, async (ctx) => {
+				const tripId = ctx.callbackQuery.data.split('_')[2];
+				await ctx.answerCallbackQuery();
+				// For now, show trip expenses
+				const groupId = ctx.chat?.id.toString();
+				if (!groupId) return;
+
+				const expenses = await env.DB.prepare(`
+					SELECT 
+						e.*,
+						u.username,
+						u.first_name
+					FROM expenses e
+					JOIN users u ON e.paid_by = u.telegram_id
+					WHERE e.trip_id = ? AND e.deleted = FALSE
+					ORDER BY e.created_at DESC
+				`).bind(tripId).all();
+
+				await showExpensesPage(ctx, expenses.results || [], 0, env.DB);
+			});
+
+			// Handle delete expense callback
+			bot.callbackQuery(/^del:/, async (ctx) => {
+				const parts = ctx.callbackQuery.data.split(':');
+				const expenseId = parts[1];
+				const returnPage = parts[2] ? parseInt(parts[2]) : null;
+				const groupId = ctx.chat?.id.toString();
+				const userId = ctx.from.id.toString();
+
+				try {
+					// Check if expense exists and user has permission
+					const expense = await env.DB.prepare(`
+						SELECT 
+							e.id, 
+							e.description, 
+							e.amount,
+							e.created_by
+						FROM expenses e
+						WHERE e.id = ? AND e.group_id = ? AND e.deleted = FALSE
+					`).bind(expenseId, groupId).first();
+
+					if (!expense) {
+						await ctx.answerCallbackQuery('Expense not found or already deleted');
+						return;
+					}
+
+					// Check permissions
+					const isCreator = expense.created_by === userId;
+					let isAdmin = false;
+					try {
+						const member = await ctx.getChatMember(userId);
+						isAdmin = member.status === 'administrator' || member.status === 'creator';
+					} catch {
+						// Ignore permission check errors
+					}
+
+					if (!isCreator && !isAdmin) {
+						await ctx.answerCallbackQuery('You can only delete expenses you created');
+						return;
+					}
+
+					// Delete the expense
+					await env.DB.prepare(
+						'UPDATE expenses SET deleted = TRUE WHERE id = ?'
+					).bind(expenseId).run();
+
+					await ctx.answerCallbackQuery('Expense deleted successfully');
+					
+					// If we have a return page, go back to the expenses list
+					if (returnPage !== null) {
+						// Get updated expenses
+						const expenses = await env.DB.prepare(`
+							SELECT 
+								e.id,
+								e.amount,
+								e.currency,
+								e.description,
+								e.category,
+								e.created_at,
+								e.created_by,
+								u.username as payer_username,
+								u.first_name as payer_first_name,
+								(SELECT COUNT(*) FROM expense_splits WHERE expense_id = e.id) as split_count
+							FROM expenses e
+							JOIN users u ON e.paid_by = u.telegram_id
+							WHERE e.group_id = ? AND e.deleted = FALSE
+							ORDER BY e.created_at DESC
+						`).bind(groupId).all();
+
+						await showExpensesPage(ctx, expenses.results || [], returnPage, env.DB);
+					} else {
+						// Just update the message
+						await ctx.editMessageText(
+							`❌ <b>Deleted:</b> ${expense.description} - $${(expense.amount as number).toFixed(2)}`,
+							{ parse_mode: 'HTML' }
+						);
+					}
+				} catch (error) {
+					console.error('Error deleting expense:', error);
+					await ctx.answerCallbackQuery('Error deleting expense');
+				}
+			});
+
+			// Handle category change callback
+			bot.callbackQuery(/^cat:/, async (ctx) => {
+				const parts = ctx.callbackQuery.data.split(':');
+				const expenseId = parts[1];
+				const returnPage = parts[2] ? parseInt(parts[2]) : null;
+				await ctx.answerCallbackQuery();
+
+				const categories = EXPENSE_CATEGORIES.map((cat, i) => {
+					const callbackData = returnPage !== null 
+						? `setcat:${expenseId}:${i}:${returnPage}`
+						: `setcat:${expenseId}:${i}`;
+					return [{ text: cat, callback_data: callbackData }];
+				});
+
+				// Add cancel button
+				categories.push([{ 
+					text: '❌ Cancel', 
+					callback_data: returnPage !== null ? `exp_page:${returnPage}` : 'close' 
+				}]);
+
+				await ctx.editMessageText(
+					'📂 <b>Select a category:</b>',
+					{
+						parse_mode: 'HTML',
+						reply_markup: {
+							inline_keyboard: categories
+						}
+					}
+				);
+			});
+
+			// Handle set category callback
+			bot.callbackQuery(/^setcat:/, async (ctx) => {
+				const parts = ctx.callbackQuery.data.split(':');
+				const expenseId = parts[1];
+				const categoryIndex = parseInt(parts[2]);
+				const returnPage = parts[3] ? parseInt(parts[3]) : null;
+				const category = EXPENSE_CATEGORIES[categoryIndex];
+				const groupId = ctx.chat?.id.toString();
+
+				try {
+					// Get expense details
+					const expense = await env.DB.prepare(`
+						SELECT description, amount 
+						FROM expenses 
+						WHERE id = ? AND group_id = ? AND deleted = FALSE
+					`).bind(expenseId, groupId).first();
+
+					if (!expense) {
+						await ctx.answerCallbackQuery('Expense not found');
+						return;
+					}
+
+					// Update category
+					await env.DB.prepare(
+						'UPDATE expenses SET category = ? WHERE id = ?'
+					).bind(category, expenseId).run();
+
+					// Update category mapping for AI
+					await env.DB.prepare(`
+						INSERT INTO category_mappings (description_pattern, category, confidence)
+						VALUES (?, ?, 1.0)
+						ON CONFLICT(description_pattern) DO UPDATE SET
+							category = excluded.category,
+							usage_count = usage_count + 1,
+							confidence = MIN(1.0, confidence + 0.1)
+					`).bind(expense.description?.toString().toLowerCase() || '', category).run();
+
+					await ctx.answerCallbackQuery(`Category updated to ${category}`);
+					
+					// If we have a return page, go back to the expenses list
+					if (returnPage !== null) {
+						// Get updated expenses
+						const expenses = await env.DB.prepare(`
+							SELECT 
+								e.id,
+								e.amount,
+								e.currency,
+								e.description,
+								e.category,
+								e.created_at,
+								e.created_by,
+								u.username as payer_username,
+								u.first_name as payer_first_name,
+								(SELECT COUNT(*) FROM expense_splits WHERE expense_id = e.id) as split_count
+							FROM expenses e
+							JOIN users u ON e.paid_by = u.telegram_id
+							WHERE e.group_id = ? AND e.deleted = FALSE
+							ORDER BY e.created_at DESC
+						`).bind(groupId).all();
+
+						await showExpensesPage(ctx, expenses.results || [], returnPage, env.DB);
+					} else {
+						// Just delete the message
+						await ctx.deleteMessage();
+					}
+				} catch (error) {
+					console.error('Error updating category:', error);
+					await ctx.answerCallbackQuery('Error updating category');
+				}
+			});
+
+			// Handle expense details callback
+			bot.callbackQuery(/^exp:/, async (ctx) => {
+				const expenseId = ctx.callbackQuery.data.split(':')[1];
+				const groupId = ctx.chat?.id.toString();
+
+				try {
+					// Get expense with full details
+					const expense = await env.DB.prepare(`
+						SELECT 
+							e.*,
+							u.username as payer_username,
+							u.first_name as payer_first_name
+						FROM expenses e
+						JOIN users u ON e.paid_by = u.telegram_id
+						WHERE e.id = ? AND e.group_id = ? AND e.deleted = FALSE
+					`).bind(expenseId, groupId).first();
+
+					if (!expense) {
+						await ctx.answerCallbackQuery('Expense not found');
+						return;
+					}
+
+					// Get splits
+					const splits = await env.DB.prepare(`
+						SELECT 
+							es.amount,
+							u.username,
+							u.first_name
+						FROM expense_splits es
+						JOIN users u ON es.user_id = u.telegram_id
+						WHERE es.expense_id = ?
+					`).bind(expenseId).all();
+
+					const payerName = expense.payer_username || expense.payer_first_name || 'Unknown';
+					const splitDetails = splits.results.map(s => 
+						`  • @${s.username || s.first_name || 'Unknown'}: $${(s.amount as number).toFixed(2)}`
+					).join('\n');
+
+					const details = 
+						`📊 <b>Expense Details</b>\n\n` +
+						`<b>Description:</b> ${expense.description}\n` +
+						`<b>Total Amount:</b> $${(expense.amount as number).toFixed(2)}\n` +
+						`<b>Paid by:</b> @${payerName}\n` +
+						`<b>Category:</b> ${expense.category || 'Uncategorized'}\n` +
+						`<b>Date:</b> ${new Date(expense.created_at as string).toLocaleString()}\n\n` +
+						`<b>Split between:</b>\n${splitDetails}`;
+
+					await ctx.answerCallbackQuery();
+					await ctx.reply(details, { parse_mode: 'HTML' });
+				} catch (error) {
+					console.error('Error getting expense details:', error);
+					await ctx.answerCallbackQuery('Error loading details');
+				}
+			});
+
+			// Handle the webhook request
+			const response = await webhookCallback(bot, 'cloudflare-mod', {
+				secretToken: env.TELEGRAM_BOT_API_SECRET_TOKEN,
+			})(request);
+
+			// Add CORS headers to the response
+			const newHeaders = new Headers(response.headers);
+			Object.entries(corsHeaders).forEach(([key, value]) => {
+				newHeaders.set(key, value);
+			});
+
+			return new Response(response.body, {
+				status: response.status,
+				statusText: response.statusText,
+				headers: newHeaders,
+			});
+		} catch (error) {
+			console.error('Error in bot:', error);
+			// Return a friendly message for non-webhook requests
+			return new Response('FinPals - Telegram Expense Splitting Bot', {
+				status: 200,
+				headers: { ...corsHeaders, 'content-type': 'text/plain' },
+			});
+		}
+	},
+};
+
+export default worker;
+
+// Export Durable Object for session storage so Workers runtime can instantiate it
+export { SessionDO } from './SessionDO';
