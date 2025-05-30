@@ -32,16 +32,39 @@ export function convertCurrency(amount: number, from: string, to: string): numbe
 }
 
 export function formatCurrency(amount: number, currency: string): string {
-	const symbol = CURRENCY_SYMBOLS[currency] || '$';
-	return `${symbol}${amount.toFixed(2)}`;
+	const symbol = CURRENCY_SYMBOLS[currency];
+	
+	// Special handling for JPY (no decimals)
+	if (currency === 'JPY') {
+		const formatted = Math.round(amount).toLocaleString('en-US');
+		return `${symbol}${formatted}`;
+	}
+	
+	// Unknown currency
+	if (!symbol) {
+		return `${amount.toFixed(2)} ${currency}`;
+	}
+	
+	// Format with thousands separator
+	const formatted = amount.toLocaleString('en-US', {
+		minimumFractionDigits: 2,
+		maximumFractionDigits: 2
+	});
+	
+	return `${symbol}${formatted}`;
+}
+
+export function getCurrencySymbol(currency: string): string {
+	return CURRENCY_SYMBOLS[currency] || currency;
 }
 
 export function parseCurrencyFromText(text: string): { amount: number; currency: string } | null {
-	// Match patterns like $100, €50, 100 USD, etc.
+	// Match patterns like $100, €50, 100 USD, EUR 25.50, or just 50
 	const patterns = [
-		/^([€£¥₹]|A\$|C\$)(\d+(?:\.\d+)?)/,  // Symbol first
-		/^(\d+(?:\.\d+)?)\s*(USD|EUR|GBP|JPY|CNY|SGD|INR|AUD|CAD)/i,  // Amount then code
-		/^\$(\d+(?:\.\d+)?)/  // Default $ to USD
+		/([€£¥₹]|A\$|C\$|\$)(\d+(?:\.\d+)?)/,  // Symbol first (anywhere in string)
+		/(\d+(?:\.\d+)?)\s*(USD|EUR|GBP|JPY|CNY|SGD|INR|AUD|CAD)/i,  // Amount then code
+		/(USD|EUR|GBP|JPY|CNY|SGD|INR|AUD|CAD)\s*(\d+(?:\.\d+)?)/i,  // Code then amount
+		/^(\d+(?:\.\d+)?)$/  // Just a number, default to USD
 	];
 
 	for (const pattern of patterns) {
@@ -56,8 +79,11 @@ export function parseCurrencyFromText(text: string): { amount: number; currency:
 			} else if (pattern === patterns[1]) {
 				// Amount then code
 				return { amount: parseFloat(match[1]), currency: match[2].toUpperCase() };
+			} else if (pattern === patterns[2]) {
+				// Code then amount
+				return { amount: parseFloat(match[2]), currency: match[1].toUpperCase() };
 			} else {
-				// Default $
+				// Just a number
 				return { amount: parseFloat(match[1]), currency: 'USD' };
 			}
 		}

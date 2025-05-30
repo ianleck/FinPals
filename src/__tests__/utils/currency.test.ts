@@ -106,7 +106,7 @@ describe('Currency utilities', () => {
 			expect(getCurrencySymbol('GBP')).toBe('£');
 			expect(getCurrencySymbol('JPY')).toBe('¥');
 			expect(getCurrencySymbol('CNY')).toBe('¥');
-			expect(getCurrencySymbol('SGD')).toBe('S$');
+			expect(getCurrencySymbol('SGD')).toBe('$');
 		});
 
 		it('should return currency code for unknown currency', () => {

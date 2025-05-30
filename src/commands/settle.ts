@@ -151,10 +151,9 @@ export async function handleSettle(ctx: Context, db: D1Database) {
 			);
 		} catch (error) {
 			// User might have blocked the bot
-			console.log(`Could not notify user ${toUserId}:`, error);
 		}
 	} catch (error) {
-		console.error('Error recording settlement:', error);
+		// Error recording settlement
 		await reply(ctx, ERROR_MESSAGES.DATABASE_ERROR);
 	}
 }

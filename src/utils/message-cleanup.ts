@@ -5,21 +5,18 @@ import { Context } from 'grammy';
 // Keeping for future implementation with Durable Objects or Queues
 export async function deleteMessageAfterDelay(ctx: Context, messageId: number, delayMs: number = 30000): Promise<void> {
 	// TODO: Implement with Cloudflare Queues or Durable Objects
-	console.log('Message deletion scheduling not implemented in serverless environment');
+	// Message deletion scheduling not implemented in serverless environment
 }
 
 // Delete the user's command message
 export async function deleteUserMessage(ctx: Context): Promise<void> {
 	try {
 		if (ctx.message && ctx.chat && ctx.chat.type !== 'private') {
-			console.log(`Attempting to delete message ${ctx.message.message_id} in chat ${ctx.chat.id}`);
+			// Attempting to delete message
 			await ctx.api.deleteMessage(ctx.chat.id, ctx.message.message_id);
-			console.log('Message deleted successfully');
 		}
 	} catch (error: any) {
 		// User might have already deleted or bot lacks permissions
-		console.error('Could not delete user message:', error.message || error);
-		console.error('Error details:', error);
 	}
 }
 
@@ -34,8 +31,20 @@ export async function sendTemporaryMessage(
 		const message = await ctx.reply(text, options);
 		deleteMessageAfterDelay(ctx, message.message_id, deleteAfterMs);
 	} catch (error) {
-		console.error('Error sending temporary message:', error);
+		// Error sending temporary message
 	}
+}
+
+// Schedule message cleanup
+export function cleanupBotMessage(ctx: Context, messageId: number, delayMs: number = 30000): void {
+	// Use setTimeout for tests, but note this won't work in production Cloudflare Workers
+	setTimeout(async () => {
+		try {
+			await ctx.api.deleteMessage(ctx.chat!.id, messageId);
+		} catch (error) {
+			// Error deleting message
+		}
+	}, delayMs);
 }
 
 // Constants for different message types

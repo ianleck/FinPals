@@ -1,23 +1,25 @@
+import { vi } from 'vitest';
+
 export function createMockDB(): D1Database {
 	const results = new Map<string, any>();
 	
 	const mockPreparedStatement = {
-		bind: jest.fn().mockReturnThis(),
-		first: jest.fn().mockImplementation(async () => {
+		bind: vi.fn().mockReturnThis(),
+		first: vi.fn().mockImplementation(async () => {
 			const key = JSON.stringify(Array.from(arguments));
 			return results.get(key) || null;
 		}),
-		all: jest.fn().mockImplementation(async () => {
+		all: vi.fn().mockImplementation(async () => {
 			const key = JSON.stringify(Array.from(arguments));
 			return { results: results.get(key) || [] };
 		}),
-		run: jest.fn().mockResolvedValue({ success: true }),
+		run: vi.fn().mockResolvedValue({ success: true, meta: { changes: 1 } }),
 	};
 
 	const mockDB = {
-		prepare: jest.fn().mockReturnValue(mockPreparedStatement),
-		batch: jest.fn().mockResolvedValue([]),
-		exec: jest.fn().mockResolvedValue({ count: 0 }),
+		prepare: vi.fn().mockReturnValue(mockPreparedStatement),
+		batch: vi.fn().mockResolvedValue([]),
+		exec: vi.fn().mockResolvedValue({ count: 0 }),
 		_setMockData: (key: string, data: any) => {
 			results.set(key, data);
 		},

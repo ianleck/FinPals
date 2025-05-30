@@ -6,25 +6,45 @@ export function generateInsight(
 	participantCount: number,
 	previousExpenses?: any[]
 ): string | null {
+	// Add randomness check first
+	if (Math.random() > 0.5) {
+		return null;
+	}
+	
 	const insights: string[] = [];
+	const hour = new Date().getHours();
+	const lowerDesc = description.toLowerCase();
+	
+	// Time-based insights
+	if (hour >= 11 && hour <= 14 && (lowerDesc.includes('meal') || lowerDesc.includes('lunch') || category === 'Food & Dining')) {
+		insights.push('🕐 Lunch time! Hope it was delicious');
+	}
+	
+	if (hour >= 6 && hour <= 10 && (lowerDesc.includes('coffee') || lowerDesc.includes('breakfast'))) {
+		insights.push('☕ Morning coffee run!');
+	}
 	
 	// Price insights
 	if (category === 'Food & Dining') {
 		if (amount / participantCount < 10) {
 			insights.push('💡 Great deal! That\'s quite affordable per person');
-		} else if (amount / participantCount > 50) {
-			insights.push('🍾 Fancy meal! Hope it was delicious');
+		} else if (amount / participantCount > 30) {
+			insights.push('💡 Fancy meal! Hope it was worth it');
 		}
-		
-		// Check if it's a recurring expense
-		if (previousExpenses && previousExpenses.length > 2) {
-			const avgAmount = previousExpenses.reduce((sum, e) => sum + e.amount, 0) / previousExpenses.length;
-			if (amount > avgAmount * 1.3) {
-				insights.push('📈 This is 30% more than your usual spending here');
-			} else if (amount < avgAmount * 0.7) {
-				insights.push('📉 Nice savings! 30% less than usual');
-			}
-		}
+	}
+	
+	// Group size insights
+	if (participantCount >= 6) {
+		insights.push('🎉 Big party! Looks like fun');
+	}
+	
+	// Category-specific insights
+	if (category === 'Transportation') {
+		insights.push('🚗 Getting around!');
+	}
+	
+	if (category === 'Entertainment') {
+		insights.push('🎬 Fun times!');
 	}
 	
 	// Transportation insights

@@ -14,8 +14,11 @@
       "mcp__ide__getDiagnostics",
       "Bash(cat:*)",
       "Bash(ls:*)",
-      "Bash(find:*)"
+      "Bash(find:*)",
+      "Bash(npx wrangler d1 list:*)",
+      "Bash(npm test:*)"
     ],
     "deny": []
-  }
+  },
+  "enableAllProjectMcpServers": false
 }

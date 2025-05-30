@@ -1,0 +1,74 @@
+#:schema node_modules/wrangler/config-schema.json
+name = "finpals-telegram"
+main = "src/index.ts"
+compatibility_date = "2024-11-11"
+compatibility_flags = ["nodejs_compat"]
+
+# Add your Cloudflare account ID here
+account_id = "YOUR_CLOUDFLARE_ACCOUNT_ID"
+
+[vars]
+# Update these with your bot token and webhook secret
+BOT_TOKEN = "YOUR_TELEGRAM_BOT_TOKEN"
+TELEGRAM_BOT_API_SECRET_TOKEN = "YOUR_WEBHOOK_SECRET_TOKEN"
+ENV = "development"
+
+# Workers Logs
+[observability]
+enabled = true
+
+# Automatically place your workloads in an optimal location
+[placement]
+mode = "smart"
+
+# Durable Object for grammY sessions
+[durable_objects]
+bindings = [
+  { name = "SESSIONS", class_name = "SessionDO" }
+]
+
+[[migrations]]
+tag = "0001_session_do"
+new_sqlite_classes = ["SessionDO"]
+
+# D1 Database binding
+[[d1_databases]]
+binding = "DB"
+database_name = "finpals-db"
+database_id = "YOUR_DATABASE_ID"  # Replace with your database ID from dashboard
+
+# Production environment
+[env.production]
+vars = { ENV = "production" }
+
+[env.production.durable_objects]
+bindings = [
+  { name = "SESSIONS", class_name = "SessionDO" }
+]
+
+[[env.production.migrations]]
+tag = "0001_session_do"
+new_sqlite_classes = ["SessionDO"]
+
+[[env.production.d1_databases]]
+binding = "DB"
+database_name = "finpals-db-prod"
+database_id = "YOUR_PRODUCTION_DATABASE_ID"
+
+# Test environment
+[env.test]
+vars = { ENV = "test" }
+
+[env.test.durable_objects]
+bindings = [
+  { name = "SESSIONS", class_name = "SessionDO" }
+]
+
+[[env.test.migrations]]
+tag = "0001_session_do"
+new_sqlite_classes = ["SessionDO"]
+
+[[env.test.d1_databases]]
+binding = "DB"
+database_name = "finpals-db-test"
+database_id = "YOUR_TEST_DATABASE_ID"

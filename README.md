@@ -1,165 +1,181 @@
-# FinPals Setup Guide
+# FinPals - Telegram Expense Tracking Bot
 
-## Prerequisites
+FinPals is a powerful Telegram bot for managing shared expenses and settlements within groups. Built on Cloudflare Workers for serverless deployment, it offers smart expense tracking, automatic categorization, and seamless group financial management.
 
-1. **Telegram Bot Token**
-   - Create a bot via [@BotFather](https://t.me/botfather)
-   - Save the bot token
+## 🌟 Features
 
-2. **Cloudflare Account**
-   - Sign up at [cloudflare.com](https://cloudflare.com)
-   - Note your account ID
+### Core Features
+- **Smart Expense Tracking** - Add expenses with automatic categorization using AI
+- **Flexible Splitting** - Equal splits or custom amounts per person
+- **Real-time Balances** - See who owes whom at any time
+- **Easy Settlements** - Record payments and track settlement history
+- **Trip Management** - Organize expenses by trips or events
+- **Personal Budgets** - Set and track budgets in private chat
+- **Data Export** - Export expenses as CSV for external analysis
 
-## Installation
+### Smart Features
+- 🧠 **AI Categorization** - Automatically categorizes expenses based on description
+- ⏰ **Time-based Insights** - Context-aware suggestions based on time of day
+- 🎯 **Smart Suggestions** - Learns from your spending patterns
+- 📊 **Visual Analytics** - Charts and insights about spending habits
+- 🔔 **DM Notifications** - Get notified when added to expenses
 
-1. **Clone and Install**
+## 🚀 Quick Start
+
+### Prerequisites
+1. **Telegram Bot Token** - Create via [@BotFather](https://t.me/botfather)
+2. **Cloudflare Account** - Sign up at [cloudflare.com](https://cloudflare.com)
+3. **Node.js 18+** - For local development
+
+### Installation
+
+1. **Clone the repository**
    ```bash
    git clone <repository-url>
    cd FinPals
    npm install
    ```
 
-2. **Configure Environment**
-   - Copy `.dev.vars.example` to `.dev.vars`
-   - Update with your bot token
-
-3. **Database Setup**
+2. **Configure environment**
    ```bash
-   # Create local database
+   # Copy the example configuration
+   cp wrangler.toml.example wrangler.toml
+   
+   # Update wrangler.toml with your:
+   # - Cloudflare account ID
+   # - Telegram bot token
+   # - Database IDs
+   ```
+
+3. **Setup database**
+   ```bash
+   # Create D1 database
    npx wrangler d1 create finpals-db
    
    # Run schema
    npx wrangler d1 execute finpals-db --local --file=./schema.sql
-   
-   # Run migrations
-   npx wrangler d1 execute finpals-db --local --file=./migrations/add_trips.sql
    ```
 
-## Bot Configuration
+4. **Start development**
+   ```bash
+   npm run dev
+   ```
 
-### 1. Set Webhook
-After deployment, set the webhook:
+## 📱 Bot Commands
+
+### Group Commands
+| Command | Description | Example |
+|---------|-------------|---------|
+| `/add` | Add expense | `/add 50 lunch @john @sarah` |
+| `/balance` | View balances | `/balance` |
+| `/settle` | Record payment | `/settle @john 25` |
+| `/expenses` | Browse expenses | `/expenses` |
+| `/trip` | Manage trips | `/trip start Bali 2024` |
+| `/stats` | View statistics | `/stats` |
+| `/export` | Export data | `/export` |
+
+### Private Commands
+| Command | Description | Example |
+|---------|-------------|---------|
+| `/budget` | Manage budgets | `/budget set "Food" 500 monthly` |
+| `/personal` | Personal summary | `/personal` |
+| `/add` | Personal expense | `/add 25 coffee` |
+
+## ⚙️ Configuration
+
+### Bot Permissions
+For proper functionality, the bot needs admin permissions in groups:
+- ✅ **Delete messages** - For cleaning up commands
+- ✅ **Send messages** - Basic functionality
+- ✅ **Read messages** - Process commands
+
+### Webhook Setup
+After deployment:
 ```bash
 curl -F "url=https://your-worker.workers.dev/" \
      https://api.telegram.org/bot<YOUR_BOT_TOKEN>/setWebhook
 ```
 
-### 2. Register Commands
-Visit your worker URL to register commands:
+### Command Registration
+Visit to enable auto-completion:
 ```
 https://your-worker.workers.dev/api/set-commands
 ```
 
-This will enable command auto-completion when users type `/` in Telegram.
+## 🧪 Testing
 
-### 3. Bot Permissions (IMPORTANT!)
-For the bot to work properly in groups, it needs admin permissions:
+Run the test suite:
+```bash
+npm test           # Run all tests
+npm run test:watch # Watch mode
+npm run coverage   # Coverage report
+```
 
-1. Add the bot to your group
-2. Go to Group Info → Administrators
-3. Add your bot as administrator
-4. Enable these permissions:
-   - ✅ **Delete messages** (Required for message cleanup)
-   - ✅ **Pin messages** (Optional)
-   - ✅ **Restrict members** (Optional)
+## 🚀 Deployment
 
-Without "Delete messages" permission, the bot cannot clean up command messages.
+### Production Deployment
+```bash
+# Create production database
+npx wrangler d1 create finpals-db-prod
 
-## Development
+# Update wrangler.toml with the database ID
 
-1. **Start Local Development**
-   ```bash
-   npm run dev
-   ```
+# Run migrations
+npx wrangler d1 execute finpals-db-prod --remote --file=./schema.sql
 
-2. **Test Bot Permissions**
-   Use `/test` command in a group to verify bot permissions
+# Deploy
+npm run deploy
+```
 
-3. **Deploy to Production**
-   ```bash
-   npm run deploy
-   ```
+### Environment Variables
+- `BOT_TOKEN` - Telegram bot token
+- `TELEGRAM_BOT_API_SECRET_TOKEN` - Webhook security token
+- `ENV` - Environment (development/production)
 
-## Features
+## 🏗️ Architecture
 
-### Message Cleanup
-- User command messages are deleted automatically (requires bot admin rights)
-- Bot messages remain visible (due to Cloudflare Workers stateless nature)
-- Works only in groups, not in private chats
+- **Runtime**: Cloudflare Workers (Serverless)
+- **Database**: Cloudflare D1 (SQLite)
+- **Session Storage**: Durable Objects
+- **Language**: TypeScript
+- **Bot Framework**: grammY
+- **Testing**: Vitest
 
-### Trip Management
-- Start trips with `/trip start <name>`
-- All expenses are linked to active trip
-- End trips to see summary
+## 📈 Performance
 
-### Command List
+Recent optimizations include:
+- Batch database queries to eliminate N+1 problems
+- Optimized expense split insertions
+- Efficient user lookup queries
+- Smart caching strategies
 
-**Group Commands:**
-- `/add [amount] [description] [@mentions]` - Add expense with smart categorization
-- `/balance` - Show who owes whom (trip-aware)
-- `/settle @user [amount]` - Record payment
-- `/expenses` - Browse all expenses with pagination
-- `/trip` - Manage trips for organized tracking
-- `/trips` - List all trips
-- `/stats` - Group statistics with insights
-- `/summary` - Monthly expense breakdown
-- `/export` - Export data as CSV
-- `/help` - Show all commands
+## 🤝 Contributing
 
-**Private Chat Commands:**
-- `/budget` - Set and track personal budgets
-- `/personal` - View cross-group summary
-- `/start` - Get started with bot
+1. Fork the repository
+2. Create your feature branch (`git checkout -b feature/amazing-feature`)
+3. Commit your changes (`git commit -m 'Add amazing feature'`)
+4. Push to the branch (`git push origin feature/amazing-feature`)
+5. Open a Pull Request
 
-**Features:**
-- 🧠 Smart categorization with emoji detection
-- ⏰ Time-based insights
-- 🏝 Trip management for events
-- 💵 Multi-currency support (coming soon)
-- 📊 Budget tracking in private chat
-- 🔔 DM notifications for expenses
+## 📝 License
 
-## Troubleshooting
+This project is licensed under the MIT License - see the LICENSE file for details.
 
-### Bot Not Responding
-1. Check webhook is set correctly
-2. Verify bot token in wrangler.toml
-3. Check logs: `npx wrangler tail`
+## 🆘 Support
 
-### Messages Not Deleting
-1. Run `/test` to check bot permissions
-2. Ensure bot is admin with "Delete messages" permission
-3. Check console logs for deletion errors
+- **Documentation**: Check `/docs` folder
+- **Issues**: GitHub Issues
+- **Logs**: `npx wrangler tail`
+- **Debug**: Use `/test` command in groups
 
-### Commands Not Showing
-1. Visit `/api/set-commands` endpoint
-2. Wait a few minutes for Telegram to update
-3. Restart Telegram app if needed
+## 🔒 Security
 
-## Production Deployment
+- Webhook validation using secret tokens
+- SQL injection prevention via prepared statements
+- HTML escaping for user inputs
+- Rate limiting for API calls
+- No sensitive data in logs
 
-1. **Create Production Database**
-   ```bash
-   npx wrangler d1 create finpals-db-prod
-   ```
+---
 
-2. **Update wrangler.toml**
-   Add the database_id to production section
-
-3. **Run Production Schema**
-   ```bash
-   npx wrangler d1 execute finpals-db-prod --remote --file=./schema.sql
-   npx wrangler d1 execute finpals-db-prod --remote --file=./migrations/add_trips.sql
-   ```
-
-4. **Deploy**
-   ```bash
-   npm run deploy --env production
-   ```
-
-## Support
-
-For issues or questions:
-- Check logs: `npx wrangler tail`
-- Debug with `/test` command
-- Review error messages in console
+Built with ❤️ using Cloudflare Workers and grammY

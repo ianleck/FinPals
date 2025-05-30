@@ -145,7 +145,13 @@ async function setBudget(ctx: Context, db: D1Database, userId: string, args: str
 		return;
 	}
 
-	category = args.slice(0, amountIndex).join(' ').replace(/["']/g, '');
+	category = args.slice(0, amountIndex).join(' ').replace(/["']/g, '').trim();
+	
+	if (!category) {
+		await reply(ctx, '❌ Category cannot be empty\n\nUsage: /budget set [category] [amount] [period]');
+		return;
+	}
+	
 	const amount = parseFloat(args[amountIndex]);
 	const period = args[amountIndex + 1]?.toLowerCase();
 
@@ -160,10 +166,16 @@ async function setBudget(ctx: Context, db: D1Database, userId: string, args: str
 		VALUES (?, ?, ?, ?)
 	`).bind(userId, category, amount, period).run();
 
+	const periodAbbrev = {
+		'daily': '/day',
+		'weekly': '/week', 
+		'monthly': '/month'
+	}[period] || period;
+	
 	await reply(ctx, 
 		`✅ <b>Budget Set!</b>\n\n` +
 		`📂 Category: ${category}\n` +
-		`💵 Amount: $${amount.toFixed(2)} ${period}\n\n` +
+		`💵 Amount: $${amount.toFixed(2)}${periodAbbrev}\n\n` +
 		`I'll track your ${category} expenses and notify you when you're close to your limit!`,
 		{ parse_mode: 'HTML' }
 	);

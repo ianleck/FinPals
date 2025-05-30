@@ -12,7 +12,7 @@ describe('Message cleanup utilities', () => {
 
 			await deleteUserMessage(ctx);
 
-			expect(ctx.deleteMessage).toHaveBeenCalled();
+			expect(ctx.api.deleteMessage).toHaveBeenCalledWith(-1001234567890, 123);
 		});
 
 		it('should not delete in private chat', async () => {
@@ -23,7 +23,7 @@ describe('Message cleanup utilities', () => {
 
 			await deleteUserMessage(ctx);
 
-			expect(ctx.deleteMessage).not.toHaveBeenCalled();
+			expect(ctx.api.deleteMessage).not.toHaveBeenCalled();
 		});
 
 		it('should handle missing message gracefully', async () => {
@@ -37,7 +37,7 @@ describe('Message cleanup utilities', () => {
 
 		it('should handle deletion errors gracefully', async () => {
 			const ctx = createMockContext();
-			ctx.deleteMessage = vi.fn().mockRejectedValue(new Error('No permission'));
+			ctx.api.deleteMessage = vi.fn().mockRejectedValue(new Error('No permission'));
 
 			// Should not throw
 			await expect(deleteUserMessage(ctx)).resolves.not.toThrow();
@@ -56,7 +56,7 @@ describe('Message cleanup utilities', () => {
 
 			vi.advanceTimersByTime(1000);
 
-			expect(ctx.deleteMessage).toHaveBeenCalledWith(messageId);
+			expect(ctx.api.deleteMessage).toHaveBeenCalledWith(ctx.chat.id, messageId);
 			vi.useRealTimers();
 		});
 
@@ -68,17 +68,17 @@ describe('Message cleanup utilities', () => {
 			cleanupBotMessage(ctx, messageId);
 
 			vi.advanceTimersByTime(29999);
-			expect(ctx.deleteMessage).not.toHaveBeenCalled();
+			expect(ctx.api.deleteMessage).not.toHaveBeenCalled();
 
 			vi.advanceTimersByTime(1);
-			expect(ctx.deleteMessage).toHaveBeenCalled();
+			expect(ctx.api.deleteMessage).toHaveBeenCalled();
 
 			vi.useRealTimers();
 		});
 
 		it('should handle cleanup errors gracefully', () => {
 			const ctx = createMockContext();
-			ctx.deleteMessage = vi.fn().mockRejectedValue(new Error('Message not found'));
+			ctx.api.deleteMessage = vi.fn().mockRejectedValue(new Error('Message not found'));
 
 			vi.useFakeTimers();
 			cleanupBotMessage(ctx, 456);

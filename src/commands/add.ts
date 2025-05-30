@@ -4,6 +4,7 @@ import { replyAndCleanup, MESSAGE_LIFETIMES } from '../utils/message';
 import { deleteUserMessage } from '../utils/message-cleanup';
 import { generateInsight } from '../utils/smart-insights';
 import { reply } from '../utils/reply';
+import { formatCurrency } from '../utils/currency';
 
 // Enhanced AI categorization with emoji detection and context
 function suggestCategory(description: string, amount?: number): string | null {
@@ -124,7 +125,7 @@ export async function handleAdd(ctx: Context, db: D1Database) {
 	const isPersonal = ctx.chat?.type === 'private';
 
 	const message = ctx.message?.text || '';
-	const args = message.split(' ').slice(1); // Remove the /add command
+	const args = message.split(' ').filter(s => s.length > 0).slice(1); // Remove the /add command and filter empty strings
 
 	if (args.length < 2) {
 		const usage = isPersonal
@@ -273,23 +274,38 @@ export async function handleAdd(ctx: Context, db: D1Database) {
 					participants.push({ userId, amount: customAmount });
 				}
 
-				// Try to resolve unknown mentions
-				for (const mention of unknownMentions) {
-					const username = mention.substring(1);
-					const user = await db
+				// Try to resolve unknown mentions with batch query
+				if (unknownMentions.length > 0) {
+					const usernames = unknownMentions.map(m => m.substring(1));
+					const placeholders = usernames.map(() => '?').join(',');
+					const users = await db
 						.prepare(
-							'SELECT u.telegram_id FROM users u ' +
-								'JOIN group_members gm ON u.telegram_id = gm.user_id ' +
-								'WHERE gm.group_id = ? AND u.username = ? AND gm.active = TRUE'
+							`SELECT u.telegram_id, u.username 
+							FROM users u 
+							JOIN group_members gm ON u.telegram_id = gm.user_id 
+							WHERE gm.group_id = ? 
+							AND u.username IN (${placeholders})
+							AND gm.active = TRUE`
 						)
-						.bind(groupId, username)
-						.first();
+						.bind(groupId, ...usernames)
+						.all();
 
-					if (user) {
-						const customAmount = customSplits.get(mention);
-						participants.push({ userId: user.telegram_id as string, amount: customAmount });
-					} else {
-						warningMessage += `\n⚠️ ${mention} hasn't interacted with the bot yet`;
+					// Create a map for quick lookup
+					const foundUsers = new Map(
+						users.results.map(u => [u.username as string, u.telegram_id as string])
+					);
+
+					// Process each mention
+					for (const mention of unknownMentions) {
+						const username = mention.substring(1);
+						const userId = foundUsers.get(username);
+						
+						if (userId) {
+							const customAmount = customSplits.get(mention);
+							participants.push({ userId, amount: customAmount });
+						} else {
+							warningMessage += `\n⚠️ ${mention} hasn't interacted with the bot yet`;
+						}
 					}
 				}
 
@@ -327,7 +343,7 @@ export async function handleAdd(ctx: Context, db: D1Database) {
 				} else if (remainingAmount > 0.01) {
 					await reply(ctx,
 						`❌ Custom splits don't add up to the total!\n` +
-							`Total: $${amount.toFixed(2)}\n` +
+							`Total: ${formatCurrency(amount, 'USD')}\n` +
 							`Assigned: $${totalCustom.toFixed(2)}\n` +
 							`Remaining: $${remainingAmount.toFixed(2)}`,
 						{ parse_mode: 'HTML' }
@@ -378,19 +394,27 @@ export async function handleAdd(ctx: Context, db: D1Database) {
 			.bind(expenseId, isPersonal ? null : groupId, activeTrip?.id || null, amount, description, category, paidBy, paidBy, isPersonal)
 			.run();
 
-		// Create splits
+		// Create splits with batch insert
 		const notifyUsers: Array<{ userId: string; amount: number }> = [];
 
-		for (const participant of participants) {
-			await db
-				.prepare('INSERT INTO expense_splits (expense_id, user_id, amount) VALUES (?, ?, ?)')
-				.bind(expenseId, participant.userId, participant.amount!)
-				.run();
-
-			// Collect users to notify (except the payer)
-			if (participant.userId !== paidBy) {
-				notifyUsers.push({ userId: participant.userId, amount: participant.amount! });
+		// Prepare batch insert for expense splits
+		if (participants.length > 0) {
+			const values = participants.map(() => '(?, ?, ?)').join(',');
+			const bindings: any[] = [];
+			
+			for (const participant of participants) {
+				bindings.push(expenseId, participant.userId, participant.amount!);
+				
+				// Collect users to notify (except the payer)
+				if (participant.userId !== paidBy) {
+					notifyUsers.push({ userId: participant.userId, amount: participant.amount! });
+				}
 			}
+			
+			await db
+				.prepare(`INSERT INTO expense_splits (expense_id, user_id, amount) VALUES ${values}`)
+				.bind(...bindings)
+				.run();
 		}
 
 		// Get participant names for display
@@ -406,10 +430,20 @@ export async function handleAdd(ctx: Context, db: D1Database) {
 				.map((p) => {
 					const participant = participants.find((part) => part.userId === p.telegram_id);
 					const name = '@' + (p.username || p.first_name || 'User');
-					return participant?.amount ? `${name} ($${participant.amount.toFixed(2)})` : name;
+					return participant?.amount ? `${name} (${formatCurrency(participant.amount, 'USD')})` : name;
 				})
 				.join(', ');
 		}
+
+		// Helper function to escape HTML
+		const escapeHtml = (text: string) => {
+			return text
+				.replace(/&/g, '&amp;')
+				.replace(/</g, '&lt;')
+				.replace(/>/g, '&gt;')
+				.replace(/"/g, '&quot;')
+				.replace(/'/g, '&#039;');
+		};
 
 		// Generate smart insight
 		const insight = generateInsight(description, amount, category, participants.length);
@@ -421,17 +455,17 @@ export async function handleAdd(ctx: Context, db: D1Database) {
 		
 		const confirmationMessage = isPersonal
 			? `✅ <b>Personal Expense Added</b>\n\n` +
-			  `💵 Amount: <b>$${amount.toFixed(2)}</b>\n` +
-			  `📝 Description: ${description}\n` +
+			  `💵 Amount: <b>${formatCurrency(amount, 'USD')}</b>\n` +
+			  `📝 Description: ${escapeHtml(description)}\n` +
 			  (category ? `📂 Category: ${category} (auto-detected)\n` : '') +
 			  (insight ? `\n${insight}` : '')
 			: `✅ <b>Expense Added</b>\n\n` +
-			  `💵 Amount: <b>$${amount.toFixed(2)}</b>\n` +
-			  `📝 Description: ${description}\n` +
+			  `💵 Amount: <b>${formatCurrency(amount, 'USD')}</b>\n` +
+			  `📝 Description: ${escapeHtml(description)}\n` +
 			  `👤 Paid by: @${paidByUsername}\n` +
 			  `👥 Split: ${participantDisplay}\n` +
 			  (category ? `📂 Category: ${category} (auto-detected)\n` : '') +
-			  (activeTrip ? `🏝 Trip: ${activeTrip.name}\n` : '') +
+			  (activeTrip ? `🏝 Trip: ${escapeHtml(activeTrip.name as string)}\n` : '') +
 			  (insight ? `\n${insight}\n` : '') +
 			  warningMessage +
 			  (notifyUsers.length > 0 ? '\n\n📨 Notifying participants...' : '');
@@ -479,22 +513,21 @@ export async function handleAdd(ctx: Context, db: D1Database) {
 							notify.userId,
 							`💵 <b>You've been added to an expense!</b>\n\n` +
 								`Group: ${ctx.chat?.title || 'your group'}\n` +
-								`Description: ${description}\n` +
-								`Total: $${amount.toFixed(2)}\n` +
+								`Description: ${escapeHtml(description)}\n` +
+								`Total: ${formatCurrency(amount, 'USD')}\n` +
 								`Paid by: @${paidByUsername}\n` +
-								`Your share: <b>$${notify.amount.toFixed(2)}</b>\n\n` +
+								`Your share: <b>${formatCurrency(notify.amount, 'USD')}</b>\n\n` +
 								`Use /balance in the group to see all balances.`,
 							{ parse_mode: 'HTML' }
 						);
 					} catch (error) {
 						// User might have blocked the bot or never started a conversation
-						console.log(`Could not notify user ${notify.userId}:`, error);
 					}
 				})
 			);
 		}
 	} catch (error) {
-		console.error('Error adding expense:', error);
+		// Error adding expense
 		await reply(ctx, ERROR_MESSAGES.DATABASE_ERROR);
 	}
 }
