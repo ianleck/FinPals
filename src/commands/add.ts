@@ -5,6 +5,7 @@ import { deleteUserMessage } from '../utils/message-cleanup';
 import { generateInsight } from '../utils/smart-insights';
 import { reply } from '../utils/reply';
 import { formatCurrency } from '../utils/currency';
+import { checkBudgetAfterExpense } from '../utils/budget-alerts';
 
 // Enhanced AI categorization with emoji detection and context
 function suggestCategory(description: string, amount?: number): string | null {
@@ -503,6 +504,27 @@ export async function handleAdd(ctx: Context, db: D1Database) {
 
 		// Note: Auto-deletion of bot messages not supported in serverless environment
 		// User message has already been deleted
+
+		// Check budget alerts for all participants
+		if (category && participants.length > 0) {
+			const bot = ctx.api;
+			await Promise.all(
+				participants.map(async (participant) => {
+					try {
+						await checkBudgetAfterExpense(
+							db, 
+							bot as any, 
+							participant.userId, 
+							groupId, 
+							participant.amount || 0, 
+							category
+						);
+					} catch (error) {
+						console.error('Error checking budget for user:', participant.userId, error);
+					}
+				})
+			);
+		}
 
 		// Send DM notifications to participants in parallel (only for group expenses)
 		if (!isPersonal && notifyUsers.length > 0) {

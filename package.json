@@ -19,6 +19,7 @@
 		"wrangler": "^4.17.0"
 	},
 	"dependencies": {
+		"date-fns": "^4.1.0",
 		"grammy": "^1.32.0"
 	}
 }

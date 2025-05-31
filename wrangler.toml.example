@@ -17,6 +17,10 @@ ENV = "development"
 [observability]
 enabled = true
 
+# Cron trigger for recurring reminders (runs daily at 9 AM UTC)
+[triggers]
+crons = ["0 9 * * *"]
+
 # Automatically place your workloads in an optimal location
 [placement]
 mode = "smart"
@@ -36,6 +40,10 @@ new_sqlite_classes = ["SessionDO"]
 binding = "DB"
 database_name = "finpals-db"
 database_id = "YOUR_DATABASE_ID"  # Replace with your database ID from dashboard
+
+# AI binding for receipt OCR
+[ai]
+binding = "AI"
 
 # Production environment
 [env.production]

@@ -1,4 +1,5 @@
 import { Context } from 'grammy';
+import { generateSpendingTrends, formatTrendsMessage } from '../utils/spending-visualization';
 
 export async function handleStats(ctx: Context, db: D1Database) {
 	// Only work in group chats
@@ -90,10 +91,12 @@ export async function handleStats(ctx: Context, db: D1Database) {
 			}
 		}
 
-		await ctx.reply(message, {
+		// Send initial stats message
+		const statsMsg = await ctx.reply(message, {
 			parse_mode: 'HTML',
 			reply_markup: {
 				inline_keyboard: [
+					[{ text: '📈 View Trends', callback_data: 'view_trends' }],
 					[{ text: '📊 View Balance', callback_data: 'view_balance' }],
 					[{ text: '💵 Add Expense', callback_data: 'add_expense_help' }]
 				]

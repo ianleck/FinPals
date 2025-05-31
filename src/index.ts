@@ -2,11 +2,11 @@ import { Bot, Context, SessionFlavor, webhookCallback } from 'grammy';
 import { setupSession } from './utils/session';
 import type { D1Database, DurableObjectNamespace } from '@cloudflare/workers-types';
 import { handleStart } from './commands/start';
-import { handleAdd } from './commands/add';
+import { handleAddEnhanced as handleAdd } from './commands/add-enhanced';
 import { handleBalance } from './commands/balance';
 import { handleSettle } from './commands/settle';
 import { handleStats } from './commands/stats';
-import { handleHelp } from './commands/help';
+import { handleHelp } from './commands/help-enhanced';
 import { handleHistory } from './commands/history';
 import { handleExpenses, showExpensesPage, handleExpenseSelection } from './commands/expenses';
 import { handleDelete } from './commands/delete';
@@ -18,9 +18,13 @@ import { handleTrip } from './commands/trip';
 import { handleTrips } from './commands/trips';
 import { handleTest } from './commands/test';
 import { handleBudget } from './commands/budget';
+import { handleTemplates, handleQuickAdd } from './commands/templates';
 import { trackGroupMetadata } from './utils/group-tracker';
 import type { SessionData } from './utils/session';
 import { COMMANDS, EXPENSE_CATEGORIES } from './utils/constants';
+import { processRecurringReminders } from './utils/recurring-reminders';
+import { handleReceiptUpload } from './utils/receipt-ocr';
+import { handleVoiceMessage } from './utils/voice-handler';
 
 type MyContext = Context & SessionFlavor<SessionData> & { env: Env };
 
@@ -32,6 +36,8 @@ export interface Env {
 	DB: D1Database;
 	// Durable Object namespace for grammY sessions
 	SESSIONS: DurableObjectNamespace;
+	// AI binding for OCR
+	AI: any;
 }
 
 const corsHeaders = {
@@ -80,6 +86,7 @@ const worker = {
 					{ command: COMMANDS.EXPORT, description: 'Export data as CSV' },
 					{ command: COMMANDS.SUMMARY, description: 'View monthly summary' },
 					{ command: COMMANDS.BUDGET, description: 'Manage personal budgets (DM only)' },
+					{ command: COMMANDS.TEMPLATES, description: 'Manage expense templates' },
 					{ command: COMMANDS.HELP, description: 'Show all available commands' },
 				];
 
@@ -165,14 +172,51 @@ const worker = {
 			bot.command(COMMANDS.TRIP, (ctx) => handleTrip(ctx, env.DB));
 			bot.command(COMMANDS.TRIPS, (ctx) => handleTrips(ctx, env.DB));
 			bot.command(COMMANDS.BUDGET, (ctx) => handleBudget(ctx, env.DB));
-			bot.command(COMMANDS.HELP, handleHelp);
+			bot.command(COMMANDS.TEMPLATES, (ctx) => handleTemplates(ctx, env.DB));
+			bot.command(COMMANDS.HELP, (ctx) => handleHelp(ctx, env.DB));
 			bot.command('test', (ctx) => handleTest(ctx));
 
 			// Handle delete with underscore format (from expenses list)
 			bot.hears(/^\/delete_/, (ctx) => handleDelete(ctx, env.DB));
+			
+			// Handle template shortcuts (dynamic commands)
+			bot.on('message:text', async (ctx) => {
+				const text = ctx.message.text;
+				if (text && text.startsWith('/') && !text.includes(' ')) {
+					const command = text.substring(1).toLowerCase();
+					// Check if it's a known command
+					const knownCommands = Object.values(COMMANDS);
+					if (!knownCommands.includes(command) && command !== 'test' && !command.startsWith('delete_')) {
+						// Might be a template shortcut
+						await handleQuickAdd(ctx, env.DB, command);
+					}
+				}
+			});
+
+			// Handle photo messages (receipt OCR)
+			bot.on('message:photo', async (ctx) => {
+				// Only process in groups or when it's a reply to the bot
+				const isGroup = ctx.chat?.type !== 'private';
+				const isReplyToBot = ctx.message?.reply_to_message?.from?.id === ctx.me.id;
+				
+				if (isGroup || isReplyToBot) {
+					await handleReceiptUpload(ctx, env.DB, env);
+				}
+			});
+
+			// Handle voice messages
+			bot.on('message:voice', async (ctx) => {
+				// Only process in groups or when it's a reply to the bot
+				const isGroup = ctx.chat?.type !== 'private';
+				const isReplyToBot = ctx.message?.reply_to_message?.from?.id === ctx.me.id;
+				
+				if (isGroup || isReplyToBot) {
+					await handleVoiceMessage(ctx, env.DB, env);
+				}
+			});
 
 			// Handle callback queries
-			bot.callbackQuery('help', handleHelp);
+			bot.callbackQuery('help', (ctx) => handleHelp(ctx, env.DB));
 			bot.callbackQuery('add_expense_help', async (ctx) => {
 				await ctx.answerCallbackQuery();
 				const isPrivate = ctx.chat?.type === 'private';
@@ -244,6 +288,31 @@ const worker = {
 				await handleStats(ctx, env.DB);
 			});
 
+			bot.callbackQuery('view_trends', async (ctx) => {
+				await ctx.answerCallbackQuery();
+				const groupId = ctx.chat?.id.toString();
+				if (!groupId) return;
+				
+				try {
+					const { generateSpendingTrends, formatTrendsMessage } = await import('./utils/spending-visualization');
+					const { trends, categoryTrends, insights } = await generateSpendingTrends(env.DB, groupId);
+					const trendsMessage = formatTrendsMessage(trends, categoryTrends, insights);
+					
+					await ctx.reply(trendsMessage, { 
+						parse_mode: 'HTML',
+						reply_markup: {
+							inline_keyboard: [
+								[{ text: '📊 Back to Stats', callback_data: 'view_stats' }],
+								[{ text: '❌ Close', callback_data: 'close' }]
+							]
+						}
+					});
+				} catch (error) {
+					console.error('Error getting trends:', error);
+					await ctx.reply('❌ Error loading trends. Please try again.');
+				}
+			});
+
 			bot.callbackQuery('export_csv', async (ctx) => {
 				await ctx.answerCallbackQuery();
 				await handleExport(ctx, env.DB);
@@ -302,7 +371,7 @@ const worker = {
 					`).bind(groupId).all();
 
 					await ctx.answerCallbackQuery();
-					await showExpensesPage(ctx, expenses.results || [], page, env.DB);
+					await showExpensesPage(ctx, expenses.results || [], page);
 				} catch (error) {
 					console.error('Error navigating expenses:', error);
 					await ctx.answerCallbackQuery('Error loading expenses');
@@ -336,7 +405,7 @@ const worker = {
 
 					await ctx.answerCallbackQuery();
 					const { showPersonalExpensesPage } = await import('./commands/expenses');
-					await showPersonalExpensesPage(ctx, expenses.results || [], page, env.DB);
+					await showPersonalExpensesPage(ctx, expenses.results || [], page);
 				} catch (error) {
 					console.error('Error navigating personal expenses:', error);
 					await ctx.answerCallbackQuery('Error loading expenses');
@@ -395,7 +464,7 @@ const worker = {
 					ORDER BY e.created_at DESC
 				`).bind(tripId).all();
 
-				await showExpensesPage(ctx, expenses.results || [], 0, env.DB);
+				await showExpensesPage(ctx, expenses.results || [], 0);
 			});
 
 			// Handle delete expense callback
@@ -466,7 +535,7 @@ const worker = {
 							ORDER BY e.created_at DESC
 						`).bind(groupId).all();
 
-						await showExpensesPage(ctx, expenses.results || [], returnPage, env.DB);
+						await showExpensesPage(ctx, expenses.results || [], returnPage);
 					} else {
 						// Just update the message
 						await ctx.editMessageText(
@@ -571,7 +640,7 @@ const worker = {
 							ORDER BY e.created_at DESC
 						`).bind(groupId).all();
 
-						await showExpensesPage(ctx, expenses.results || [], returnPage, env.DB);
+						await showExpensesPage(ctx, expenses.results || [], returnPage);
 					} else {
 						// Just delete the message
 						await ctx.deleteMessage();
@@ -580,6 +649,59 @@ const worker = {
 					console.error('Error updating category:', error);
 					await ctx.answerCallbackQuery('Error updating category');
 				}
+			});
+
+			// Handle add recurring expense callback
+			bot.callbackQuery(/^add_recurring:/, async (ctx) => {
+				const [_, description, amount] = ctx.callbackQuery.data.split(':');
+				await ctx.answerCallbackQuery();
+				
+				// Simulate add command with the recurring expense
+				const messageText = `/add ${amount} ${description}`;
+				// Create a new context with the simulated message
+				const newMessage = Object.assign({}, ctx.message || {}, {
+					text: messageText
+				});
+				const newCtx = Object.assign({}, ctx, {
+					message: newMessage
+				});
+				await handleAdd(newCtx, env.DB);
+			});
+
+			// Handle dismiss reminder callback
+			bot.callbackQuery('dismiss_reminder', async (ctx) => {
+				await ctx.answerCallbackQuery('Reminder dismissed');
+				await ctx.deleteMessage();
+			});
+
+			// Handle voice confirmation callbacks
+			bot.callbackQuery(/^voice_confirm:/, async (ctx) => {
+				const [_, amount, ...descParts] = ctx.callbackQuery.data.split(':');
+				const description = descParts.join(':'); // In case description contains colons
+				await ctx.answerCallbackQuery();
+				
+				// Create a simulated add command
+				const messageText = `/add ${amount} ${description}`;
+				const newMessage = Object.assign({}, ctx.message || {}, {
+					text: messageText
+				});
+				const newCtx = Object.assign({}, ctx, {
+					message: newMessage
+				});
+				
+				await ctx.editMessageText('✅ Adding expense from voice message...');
+				await handleAdd(newCtx, env.DB);
+			});
+
+			bot.callbackQuery('voice_cancel', async (ctx) => {
+				await ctx.answerCallbackQuery('Voice expense cancelled');
+				await ctx.deleteMessage();
+			});
+
+			// Handle dismiss budget alert callback
+			bot.callbackQuery('dismiss_budget_alert', async (ctx) => {
+				await ctx.answerCallbackQuery('Budget alert dismissed');
+				await ctx.deleteMessage();
 			});
 
 			// Handle expense details callback
@@ -660,6 +782,17 @@ const worker = {
 				status: 200,
 				headers: { ...corsHeaders, 'content-type': 'text/plain' },
 			});
+		}
+	},
+	
+	async scheduled(_event: ScheduledEvent, env: Env, _ctx: ExecutionContext): Promise<void> {
+		// Process recurring expense reminders
+		try {
+			const bot = new Bot<MyContext>(env.BOT_TOKEN);
+			const stats = await processRecurringReminders(env.DB, bot);
+			console.log(`Recurring reminders processed: ${stats.sent} sent, ${stats.errors} errors`);
+		} catch (error) {
+			console.error('Error in scheduled handler:', error);
 		}
 	},
 };

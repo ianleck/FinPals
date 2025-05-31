@@ -73,6 +73,7 @@ export const COMMANDS = {
 	TRIP: 'trip',
 	TRIPS: 'trips',
 	BUDGET: 'budget',
+	TEMPLATES: 'templates',
 };
 
 export const ERROR_MESSAGES = {
