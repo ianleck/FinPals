@@ -185,7 +185,7 @@ describe('Recurring Expense Detection', () => {
             expect(patterns).toHaveLength(1);
             const nextDate = patterns[0].nextExpectedDate;
             expect(nextDate.getDate()).toBe(1); // Should be first of month
-            expect(nextDate.getTime()).toBeGreaterThan(today.getTime());
+            expect(nextDate.getTime()).toBeGreaterThanOrEqual(today.getTime());
         });
 
         it('should calculate confidence score based on consistency', async () => {

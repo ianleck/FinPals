@@ -53,14 +53,14 @@ export async function processRecurringReminders<T extends Context = Context>(
                 const userId = user.user_id as string;
                 
                 // Detect recurring patterns for this user
-                const patterns = await detectRecurringExpenses(db, groupId, userId);
+                const patterns = await detectRecurringExpenses(db, groupId);
                 
                 // Filter patterns that need reminders
                 const remindablePatterns = patterns.filter(pattern => {
-                    if (!pattern.nextExpected || pattern.confidence < 0.7) return false;
+                    if (!pattern.nextExpectedDate || pattern.confidence < 0.7) return false;
                     
                     const daysUntilNext = Math.floor(
-                        (pattern.nextExpected.getTime() - Date.now()) / (1000 * 60 * 60 * 24)
+                        (pattern.nextExpectedDate.getTime() - Date.now()) / (1000 * 60 * 60 * 24)
                     );
                     
                     return daysUntilNext >= 0 && daysUntilNext <= config.reminderThresholdDays;
@@ -124,8 +124,8 @@ async function sendRecurringReminder<T extends Context = Context>(
 }
 
 function formatReminderMessage(pattern: RecurringPattern): string {
-    const daysUntil = pattern.nextExpected 
-        ? Math.floor((pattern.nextExpected.getTime() - Date.now()) / (1000 * 60 * 60 * 24))
+    const daysUntil = pattern.nextExpectedDate 
+        ? Math.floor((pattern.nextExpectedDate.getTime() - Date.now()) / (1000 * 60 * 60 * 24))
         : 0;
     
     const frequency = pattern.frequency === 'daily' ? 'daily' :
@@ -161,7 +161,7 @@ async function recordReminderSent(
             userId,
             pattern.description,
             pattern.frequency,
-            pattern.nextExpected?.toISOString().split('T')[0]
+            pattern.nextExpectedDate?.toISOString().split('T')[0]
         )
         .run();
 }
