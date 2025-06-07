@@ -158,5 +158,3 @@ Thumbs.db
 # Backup files
 *.bak
 *.backup
-
-wrangler.toml

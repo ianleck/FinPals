@@ -16,9 +16,9 @@ export async function processReceiptImage(
 ): Promise<ReceiptData> {
     try {
         // Use Cloudflare AI Workers for OCR
-        const response = await env.AI.run('@cf/microsoft/florence-2-base', {
-            image: await fetchImageAsBase64(imageUrl),
-            prompt: 'Extract receipt information including total amount, vendor name, date, and items',
+        const response = await env.AI.run('@cf/llava-hf/llava-1.5-7b-hf', {
+            image: [await fetchImageAsArrayBuffer(imageUrl)],
+            prompt: 'Extract receipt information from this image. List the total amount, vendor name, date, and individual items with prices. Format the response as structured text.',
             max_tokens: 512,
         });
 
@@ -30,21 +30,9 @@ export async function processReceiptImage(
     }
 }
 
-async function fetchImageAsBase64(url: string): Promise<string> {
+async function fetchImageAsArrayBuffer(url: string): Promise<ArrayBuffer> {
     const response = await fetch(url);
-    const arrayBuffer = await response.arrayBuffer();
-    
-    // Convert to base64 in chunks to avoid memory issues
-    const uint8Array = new Uint8Array(arrayBuffer);
-    const chunkSize = 8192;
-    let base64 = '';
-    
-    for (let i = 0; i < uint8Array.length; i += chunkSize) {
-        const chunk = uint8Array.slice(i, i + chunkSize);
-        base64 += btoa(String.fromCharCode.apply(null, Array.from(chunk)));
-    }
-    
-    return base64;
+    return await response.arrayBuffer();
 }
 
 function parseReceiptText(text: string): ReceiptData {
