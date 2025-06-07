@@ -202,7 +202,7 @@ export async function handleBalance(ctx: Context, db: D1Database, tripId?: strin
 			}
 		}
 
-		message += `\n💵 Total unsettled: <b>$${(totalUnsettled / 2).toFixed(2)}</b>`;
+		message += `\n💵 Total unsettled: <b>$${totalUnsettled.toFixed(2)}</b>`;
 
 		await reply(ctx, message, {
 			parse_mode: 'HTML',

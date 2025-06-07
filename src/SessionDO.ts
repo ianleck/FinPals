@@ -25,10 +25,7 @@ export class SessionDO {
 	}
 
 	private async handleRead(): Promise<Response> {
-		const data = (await this.state.storage.get<SessionData>('data')) || null;
-		if (!data) {
-			return new Response('Not found', { status: 404 });
-		}
+		const data = (await this.state.storage.get<SessionData>('data')) || {};
 		return new Response(JSON.stringify(data), {
 			status: 200,
 			headers: { 'content-type': 'application/json' },

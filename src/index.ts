@@ -138,7 +138,11 @@ const worker = {
 			// Track group metadata for all messages in groups
 			bot.use(async (ctx, next) => {
 				ctx.env = env;
-				await trackGroupMetadata(ctx);
+				try {
+					await trackGroupMetadata(ctx);
+				} catch (error) {
+					console.error('Error tracking group metadata:', error);
+				}
 				return next();
 			});
 
@@ -206,12 +210,36 @@ const worker = {
 
 			// Handle voice messages
 			bot.on('message:voice', async (ctx) => {
+				console.log('Voice message event triggered');
 				// Only process in groups or when it's a reply to the bot
 				const isGroup = ctx.chat?.type !== 'private';
 				const isReplyToBot = ctx.message?.reply_to_message?.from?.id === ctx.me.id;
 				
+				console.log('Voice message context:', {
+					isGroup,
+					isReplyToBot,
+					chatType: ctx.chat?.type,
+					chatId: ctx.chat?.id,
+					fromId: ctx.from?.id
+				});
+				
 				if (isGroup || isReplyToBot) {
-					await handleVoiceMessage(ctx, env.DB, env);
+					try {
+						console.log('Calling handleVoiceMessage...');
+						await handleVoiceMessage(ctx, env.DB, env);
+					} catch (error) {
+						console.error('Voice message error:', error);
+						await ctx.reply(
+							'🎤 Voice message received!\n\n' +
+							'⚠️ Voice transcription is currently unavailable.\n\n' +
+							'Please type your expense instead:\n' +
+							'`/add [amount] [description]`\n\n' +
+							'Example: `/add 20 lunch`',
+							{ parse_mode: 'Markdown' }
+						);
+					}
+				} else {
+					console.log('Voice message ignored - not in group and not reply to bot');
 				}
 			});
 

@@ -12,15 +12,32 @@ export async function transcribeVoiceMessage(
     env: any
 ): Promise<TranscriptionResult> {
     try {
+        console.log('Downloading voice file from:', voiceFileUrl);
         // Download voice file
         const response = await fetch(voiceFileUrl);
-        const audioBuffer = await response.arrayBuffer();
+        if (!response.ok) {
+            throw new Error(`Failed to download voice file: ${response.status} ${response.statusText}`);
+        }
         
-        // Use Cloudflare AI for speech-to-text
-        const audioArray = new Uint8Array(audioBuffer);
+        const audioBuffer = await response.arrayBuffer();
+        console.log('Audio buffer size:', audioBuffer.byteLength);
+        
+        // Check if AI binding exists
+        if (!env.AI) {
+            throw new Error('AI binding not configured. Please add [ai] binding = "AI" to wrangler.toml');
+        }
+        
+        // Convert audio buffer to format expected by Whisper
+        // Whisper expects audio data as an array of numbers
+        const audioData = [...new Uint8Array(audioBuffer)];
+        console.log('Audio data length:', audioData.length);
+        
+        // Call Whisper API - ensure we're using the correct model
+        console.log('Calling Whisper API...');
         const result = await env.AI.run('@cf/openai/whisper', {
-            audio: Array.from(audioArray),
+            audio: audioData,
         });
+        console.log('Whisper API result:', result);
         
         return {
             text: result.text || '',
@@ -28,27 +45,55 @@ export async function transcribeVoiceMessage(
         };
     } catch (error) {
         console.error('Error transcribing voice:', error);
-        throw new Error('Failed to transcribe voice message');
+        throw error;
     }
 }
 
 export async function handleVoiceMessage(ctx: Context, db: D1Database, env: any) {
+    console.log('Voice message handler called');
     const voice = ctx.message?.voice;
     if (!voice) {
+        console.log('No voice object in message');
         await ctx.reply('❌ No voice message found.');
         return;
     }
     
+    console.log('Voice message details:', {
+        duration: voice.duration,
+        file_id: voice.file_id.substring(0, 20),
+        file_size: voice.file_size,
+        mime_type: voice.mime_type
+    });
+    
+    // First, let's verify we can receive voice messages
+    await ctx.reply(`🎤 Voice message received!\nDuration: ${voice.duration}s\nFile ID: ${voice.file_id.substring(0, 10)}...`);
+    
     try {
+        console.log('Getting file info for voice:', voice.file_id);
         // Get file info from Telegram
         const file = await ctx.api.getFile(voice.file_id);
         const fileUrl = `https://api.telegram.org/file/bot${env.BOT_TOKEN}/${file.file_path}`;
+        console.log('File URL:', fileUrl);
         
         // Send processing message
         const processingMsg = await ctx.reply('🎤 Processing voice message...');
         
+        // Check if AI is available
+        if (!env.AI) {
+            await ctx.api.deleteMessage(ctx.chat!.id, processingMsg.message_id);
+            await ctx.reply(
+                '⚠️ Voice transcription is not available.\n\n' +
+                'Please type your expense instead:\n' +
+                '`/add [amount] [description]`',
+                { parse_mode: 'Markdown' }
+            );
+            return;
+        }
+        
         // Transcribe the voice message
+        console.log('Starting transcription...');
         const transcription = await transcribeVoiceMessage(fileUrl, env);
+        console.log('Transcription result:', transcription);
         
         // Delete processing message
         await ctx.api.deleteMessage(ctx.chat!.id, processingMsg.message_id);
@@ -86,9 +131,20 @@ export async function handleVoiceMessage(ctx: Context, db: D1Database, env: any)
             }
         );
         
-    } catch (error) {
+    } catch (error: any) {
         console.error('Error handling voice message:', error);
-        await ctx.reply('❌ Failed to process voice message. Please try again or type the expense instead.');
+        
+        let errorMessage = '❌ Failed to process voice message.';
+        
+        if (error.message?.includes('AI binding not configured')) {
+            errorMessage += '\n\n⚠️ Voice transcription is not configured. Please ensure AI binding is set up in your Cloudflare Worker.';
+        } else if (error.message?.includes('Failed to download')) {
+            errorMessage += '\n\n⚠️ Could not download the voice file. Please try again.';
+        } else {
+            errorMessage += '\n\n💡 Please try typing the expense instead: /add [amount] [description]';
+        }
+        
+        await ctx.reply(errorMessage);
     }
 }
 
