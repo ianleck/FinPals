@@ -182,19 +182,6 @@ export async function handleReceiptUpload(ctx: Context, db: D1Database, env: any
                           (receiptData.items && receiptData.items[0]) || 
                           'Receipt expense';
         
-        // Create a simulated add command text
-        const addCommandText = `/add ${receiptData.totalAmount} ${description}`;
-        
-        // Create a new context by simulating a text message
-        // We'll call handleAddEnhanced with a modified message
-        const originalMessage = ctx.message;
-        const originalText = originalMessage?.text;
-        
-        // Temporarily modify the message text
-        if (originalMessage) {
-            (originalMessage as any).text = addCommandText;
-        }
-        
         // Show receipt details
         let receiptInfo = `📄 <b>Receipt Detected</b>\n\n`;
         receiptInfo += `💵 Amount: <b>$${receiptData.totalAmount.toFixed(2)}</b>\n`;
@@ -210,15 +197,33 @@ export async function handleReceiptUpload(ctx: Context, db: D1Database, env: any
         
         await ctx.reply(receiptInfo, { parse_mode: 'HTML' });
         
-        // Process as expense using enhanced add
-        try {
-            await handleAddEnhanced(ctx, db);
-        } finally {
-            // Restore original message text
-            if (originalMessage && originalText !== undefined) {
-                (originalMessage as any).text = originalText;
+        // Instead of modifying context, send a new message with the add command
+        const addCommandText = `/add ${receiptData.totalAmount} ${description}`;
+        await ctx.reply(
+            `Adding expense: ${addCommandText}\n\n` +
+            'Processing...',
+            { parse_mode: 'HTML' }
+        );
+        
+        // Create a new fake context with the add command
+        const fakeMessage = {
+            ...ctx.message,
+            text: addCommandText,
+            message_id: ctx.message!.message_id + 1000000, // Fake message ID
+        };
+        
+        const fakeContext = {
+            ...ctx,
+            message: fakeMessage,
+            msg: fakeMessage,
+            update: {
+                ...ctx.update,
+                message: fakeMessage
             }
-        }
+        } as Context;
+        
+        // Process as expense using enhanced add
+        await handleAddEnhanced(fakeContext, db);
         
     } catch (error) {
         console.error('Error handling receipt:', error);
