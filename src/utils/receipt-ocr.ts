@@ -1,6 +1,10 @@
 import { Context } from 'grammy';
 import type { D1Database } from '@cloudflare/workers-types';
-import { handleAddEnhanced } from '../commands/add-enhanced';
+import { reply } from './reply';
+import { suggestParticipants } from './participant-suggestions';
+import { replyAndCleanup, MESSAGE_LIFETIMES } from './message';
+import { deleteUserMessage } from './message-cleanup';
+import { generateInsight } from './smart-insights';
 
 interface ReceiptData {
     totalAmount?: number;
@@ -197,40 +201,77 @@ export async function handleReceiptUpload(ctx: Context, db: D1Database, env: any
         
         await ctx.reply(receiptInfo, { parse_mode: 'HTML' });
         
-        // Instead of modifying context, send a new message with the add command
-        const addCommandText = `/add ${receiptData.totalAmount} ${description}`;
-        await ctx.reply(
-            `Adding expense: ${addCommandText}\n\n` +
-            'Processing...',
-            { parse_mode: 'HTML' }
-        );
+        // Process the expense directly
+        const groupId = ctx.chat!.id.toString();
+        const userId = ctx.from!.id.toString();
+        const amount = receiptData.totalAmount;
         
-        // Create a new fake context with the add command
-        if (!ctx.message) {
-            console.error('No message in context');
-            await ctx.reply('❌ Unable to process receipt - missing message context.');
-            return;
+        try {
+            // Delete the user's message if in group
+            if (ctx.chat?.type !== 'private' && ctx.message?.message_id) {
+                await deleteUserMessage(ctx);
+            }
+            
+            // Get or create user
+            await db.prepare(
+                'INSERT OR IGNORE INTO users (telegram_id, username, first_name) VALUES (?, ?, ?)'
+            ).bind(userId, ctx.from?.username || null, ctx.from?.first_name || null).run();
+            
+            // Track group membership
+            await db.prepare(
+                'INSERT OR REPLACE INTO group_members (group_id, user_id, active) VALUES (?, ?, TRUE)'
+            ).bind(groupId, userId).run();
+            
+            // Get all active members for splitting
+            const members = await db.prepare(`
+                SELECT u.telegram_id, u.username, u.first_name
+                FROM users u
+                JOIN group_members gm ON u.telegram_id = gm.user_id
+                WHERE gm.group_id = ? AND gm.active = TRUE
+            `).bind(groupId).all();
+            
+            const splitCount = members.results.length;
+            const splitAmount = amount / splitCount;
+            
+            // Create expense
+            const expenseId = crypto.randomUUID();
+            await db.prepare(
+                'INSERT INTO expenses (id, group_id, paid_by, amount, currency, description, category, created_by, is_personal) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
+            ).bind(expenseId, groupId, userId, amount, 'USD', description, 'Uncategorized', userId, false).run();
+            
+            // Create splits
+            for (const member of members.results) {
+                await db.prepare(
+                    'INSERT INTO expense_splits (expense_id, user_id, amount) VALUES (?, ?, ?)'
+                ).bind(expenseId, member.telegram_id as string, splitAmount).run();
+            }
+            
+            // Format success message
+            const username = ctx.from?.username || ctx.from?.first_name || 'Someone';
+            let message = `✅ <b>Receipt expense added!</b>\n\n`;
+            message += `💵 <b>${username}</b> paid <b>$${amount.toFixed(2)}</b> for ${description}\n`;
+            message += `👥 Split between ${splitCount} ${splitCount === 1 ? 'person' : 'people'} (<b>$${splitAmount.toFixed(2)}</b> each)\n`;
+            
+            // Generate insight
+            const insight = generateInsight(description, amount, 'Uncategorized', splitCount, []);
+            if (insight) {
+                message += `\n💡 ${insight}`;
+            }
+            
+            await replyAndCleanup(ctx, message, {
+                parse_mode: 'HTML',
+                reply_markup: {
+                    inline_keyboard: [[
+                        { text: '📊 View Balance', callback_data: 'view_balance' },
+                        { text: '📈 View Stats', callback_data: 'view_stats' }
+                    ]]
+                }
+            }, MESSAGE_LIFETIMES.SUCCESS);
+            
+        } catch (error) {
+            console.error('Error processing receipt expense:', error);
+            await reply(ctx, '❌ Failed to add expense. Please try again.');
         }
-        
-        const fakeMessage = {
-            message_id: ctx.message.message_id + 1000000, // Fake message ID
-            date: ctx.message.date,
-            chat: ctx.message.chat,
-            from: ctx.message.from,
-            text: addCommandText,
-            entities: [],
-        };
-        
-        const fakeContext = Object.create(ctx);
-        fakeContext.message = fakeMessage;
-        fakeContext.msg = fakeMessage;
-        fakeContext.update = {
-            ...ctx.update,
-            message: fakeMessage
-        };
-        
-        // Process as expense using enhanced add
-        await handleAddEnhanced(fakeContext, db);
         
     } catch (error) {
         console.error('Error handling receipt:', error);
