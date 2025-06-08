@@ -83,24 +83,26 @@ function parseReceiptText(text: string): ReceiptData {
         }
     }
     
-    // Try other patterns
-    for (const pattern of totalPatterns) {
-        const match = pattern.global ? [...text.matchAll(pattern)] : [text.match(pattern)].filter(Boolean);
-        const amounts = [];
-        for (const m of match) {
-            if (m && m[1]) {
-                const amount = parseFloat(m[1].replace(',', ''));
-                if (amount > 0 && !isNaN(amount)) {
-                    amounts.push(amount);
+    // Try other patterns only if we haven't found a total yet
+    if (!data.totalAmount) {
+        for (const pattern of totalPatterns) {
+            const match = pattern.global ? [...text.matchAll(pattern)] : [text.match(pattern)].filter(Boolean);
+            const amounts = [];
+            for (const m of match) {
+                if (m && m[1]) {
+                    const amount = parseFloat(m[1].replace(',', ''));
+                    if (amount > 0 && !isNaN(amount)) {
+                        amounts.push(amount);
+                    }
                 }
             }
-        }
-        
-        // If we found amounts, use the largest one (likely the total)
-        if (amounts.length > 0) {
-            data.totalAmount = Math.max(...amounts);
-            console.log('Found total amount:', data.totalAmount);
-            break;
+            
+            // If we found amounts, use the largest one (likely the total)
+            if (amounts.length > 0) {
+                data.totalAmount = Math.max(...amounts);
+                console.log('Found total amount from pattern:', data.totalAmount);
+                break;
+            }
         }
     }
     
@@ -180,16 +182,18 @@ export async function handleReceiptUpload(ctx: Context, db: D1Database, env: any
                           (receiptData.items && receiptData.items[0]) || 
                           'Receipt expense';
         
-        // Create a simulated message for the add command
-        const simulatedMessage = {
-            ...ctx.message,
-            text: `/add ${receiptData.totalAmount} ${description}`
-        };
+        // Create a simulated add command text
+        const addCommandText = `/add ${receiptData.totalAmount} ${description}`;
         
-        // Update context with simulated message
-        const newCtx = Object.assign(Object.create(Object.getPrototypeOf(ctx)), ctx, {
-            message: simulatedMessage
-        });
+        // Create a new context by simulating a text message
+        // We'll call handleAddEnhanced with a modified message
+        const originalMessage = ctx.message;
+        const originalText = originalMessage?.text;
+        
+        // Temporarily modify the message text
+        if (originalMessage) {
+            (originalMessage as any).text = addCommandText;
+        }
         
         // Show receipt details
         let receiptInfo = `📄 <b>Receipt Detected</b>\n\n`;
@@ -207,7 +211,14 @@ export async function handleReceiptUpload(ctx: Context, db: D1Database, env: any
         await ctx.reply(receiptInfo, { parse_mode: 'HTML' });
         
         // Process as expense using enhanced add
-        await handleAddEnhanced(newCtx as Context, db);
+        try {
+            await handleAddEnhanced(ctx, db);
+        } finally {
+            // Restore original message text
+            if (originalMessage && originalText !== undefined) {
+                (originalMessage as any).text = originalText;
+            }
+        }
         
     } catch (error) {
         console.error('Error handling receipt:', error);
