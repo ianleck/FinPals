@@ -283,9 +283,9 @@ export async function handleSettleCallback(ctx: Context, db: D1Database) {
 	
 	const currentUserId = ctx.from!.id.toString();
 	
-	// Only allow the person who owes money to confirm the settlement
-	if (currentUserId !== owerId) {
-		await ctx.answerCallbackQuery('Only the person who owes can settle this balance');
+	// Allow both parties to confirm the settlement
+	if (currentUserId !== owerId && currentUserId !== owedId) {
+		await ctx.answerCallbackQuery('Only the involved parties can settle this balance');
 		return;
 	}
 	
@@ -314,23 +314,43 @@ export async function handleSettleCallback(ctx: Context, db: D1Database) {
 		'INSERT INTO settlements (id, group_id, from_user, to_user, amount, created_by) VALUES (?, ?, ?, ?, ?, ?)'
 	).bind(settlementId, groupId, owerId, owedId, amount, currentUserId).run();
 	
-	// Update the message
-	await ctx.editMessageText(
-		`💰 <b>Settlement Recorded</b>\n\n` +
-		`@${owerName} paid @${owedName}: <b>$${amount.toFixed(2)}</b>\n\n` +
-		`✅ This balance has been settled!`,
-		{ parse_mode: 'HTML' }
-	);
+	// Update the message based on who is settling
+	let settlementMessage: string;
+	if (currentUserId === owerId) {
+		// The person who owes is settling
+		settlementMessage = `💰 <b>Settlement Recorded</b>\n\n` +
+			`@${owerName} paid @${owedName}: <b>$${amount.toFixed(2)}</b>\n\n` +
+			`✅ This balance has been settled!`;
+	} else {
+		// The person who is owed is recording the settlement
+		settlementMessage = `💰 <b>Settlement Recorded</b>\n\n` +
+			`@${owedName} recorded that @${owerName} paid: <b>$${amount.toFixed(2)}</b>\n\n` +
+			`✅ This balance has been settled!`;
+	}
 	
-	// Send notification to the person who received the payment
+	await ctx.editMessageText(settlementMessage, { parse_mode: 'HTML' });
+	
+	// Send notification to the other party
 	try {
-		await ctx.api.sendMessage(
-			owedId,
-			`💰 <b>Payment Received!</b>\n\n` +
-			`@${owerName} paid you <b>$${amount.toFixed(2)}</b>\n` +
-			`Group: ${ctx.chat?.title || 'your group'}`,
-			{ parse_mode: 'HTML' }
-		);
+		if (currentUserId === owerId) {
+			// Notify the person who received the payment
+			await ctx.api.sendMessage(
+				owedId,
+				`💰 <b>Payment Received!</b>\n\n` +
+				`@${owerName} paid you <b>$${amount.toFixed(2)}</b>\n` +
+				`Group: ${ctx.chat?.title || 'your group'}`,
+				{ parse_mode: 'HTML' }
+			);
+		} else {
+			// Notify the person who owes that their payment was recorded
+			await ctx.api.sendMessage(
+				owerId,
+				`💰 <b>Payment Recorded!</b>\n\n` +
+				`@${owedName} has recorded that you paid them <b>$${amount.toFixed(2)}</b>\n` +
+				`Group: ${ctx.chat?.title || 'your group'}`,
+				{ parse_mode: 'HTML' }
+			);
+		}
 	} catch (error) {
 		// User might have blocked the bot
 	}
