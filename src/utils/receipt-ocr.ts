@@ -206,21 +206,28 @@ export async function handleReceiptUpload(ctx: Context, db: D1Database, env: any
         );
         
         // Create a new fake context with the add command
+        if (!ctx.message) {
+            console.error('No message in context');
+            await ctx.reply('❌ Unable to process receipt - missing message context.');
+            return;
+        }
+        
         const fakeMessage = {
-            ...ctx.message,
+            message_id: ctx.message.message_id + 1000000, // Fake message ID
+            date: ctx.message.date,
+            chat: ctx.message.chat,
+            from: ctx.message.from,
             text: addCommandText,
-            message_id: ctx.message!.message_id + 1000000, // Fake message ID
+            entities: [],
         };
         
-        const fakeContext = {
-            ...ctx,
-            message: fakeMessage,
-            msg: fakeMessage,
-            update: {
-                ...ctx.update,
-                message: fakeMessage
-            }
-        } as Context;
+        const fakeContext = Object.create(ctx);
+        fakeContext.message = fakeMessage;
+        fakeContext.msg = fakeMessage;
+        fakeContext.update = {
+            ...ctx.update,
+            message: fakeMessage
+        };
         
         // Process as expense using enhanced add
         await handleAddEnhanced(fakeContext, db);
