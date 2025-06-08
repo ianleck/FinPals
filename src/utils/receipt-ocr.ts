@@ -21,12 +21,17 @@ export async function processReceiptImage(
         // Use Cloudflare AI Workers for OCR
         const response = await env.AI.run('@cf/llava-hf/llava-1.5-7b-hf', {
             image: [...imageArray], // Convert Uint8Array to regular array
-            prompt: 'Extract receipt information from this image. List the total amount, vendor name, date, and individual items with prices. Format the response as structured text.',
+            prompt: 'This is a receipt image. Please extract and list: 1) The total amount paid (look for TOTAL, AMOUNT DUE, or the largest price), 2) The vendor/store name, 3) The date if visible. Start your response with "TOTAL: $XX.XX" if you can find the total amount.',
             max_tokens: 512,
         });
 
+        console.log('LLaVA response:', response);
+
         // Parse the AI response to extract receipt data
-        return parseReceiptText(response.text || '');
+        const responseText = response.response || response.text || '';
+        console.log('Response text to parse:', responseText);
+        
+        return parseReceiptText(responseText);
     } catch (error) {
         console.error('Error processing receipt:', error);
         throw new Error('Failed to process receipt image');
@@ -42,10 +47,35 @@ async function fetchImageAsUint8Array(url: string): Promise<Uint8Array> {
 function parseReceiptText(text: string): ReceiptData {
     const data: ReceiptData = {};
     
-    // Extract total amount - look for patterns like "Total: $XX.XX" or "TOTAL XX.XX"
-    const totalMatch = text.match(/(?:total|amount|sum)[\s:]*\$?([\d,]+\.?\d*)/i);
-    if (totalMatch) {
-        data.totalAmount = parseFloat(totalMatch[1].replace(',', ''));
+    console.log('Parsing receipt text:', text);
+    
+    // Extract total amount - look for various patterns
+    const totalPatterns = [
+        /(?:total|amount|sum|due|grand\s*total)[\s:]*\$?([\d,]+\.?\d*)/i,
+        /\$?([\d,]+\.?\d*)[\s]*(?:total|amount|sum|due)/i,
+        /(?:pay|charge|charged)[\s:]*\$?([\d,]+\.?\d*)/i,
+        /\b\$?([\d,]+\.\d{2})\b.*(?:total|sum|due)/i,
+        /(?:total|sum|due).*\$?([\d,]+\.\d{2})\b/i,
+        // Look for standalone currency amounts that might be totals
+        /\$?([\d,]+\.\d{2})(?:\s|$)/g
+    ];
+    
+    for (const pattern of totalPatterns) {
+        const matches = text.matchAll(pattern);
+        const amounts = [];
+        for (const match of matches) {
+            const amount = parseFloat(match[1].replace(',', ''));
+            if (amount > 0) {
+                amounts.push(amount);
+            }
+        }
+        
+        // If we found amounts, use the largest one (likely the total)
+        if (amounts.length > 0) {
+            data.totalAmount = Math.max(...amounts);
+            console.log('Found total amount:', data.totalAmount);
+            break;
+        }
     }
     
     // Extract vendor name - usually at the top of receipt
@@ -107,7 +137,13 @@ export async function handleReceiptUpload(ctx: Context, db: D1Database, env: any
         await ctx.api.deleteMessage(ctx.chat!.id, processingMsg.message_id);
         
         if (!receiptData.totalAmount) {
-            await ctx.reply('❌ Could not extract amount from receipt. Please add the expense manually.');
+            await ctx.reply(
+                '❌ Could not extract amount from receipt.\n\n' +
+                'Please add the expense manually:\n' +
+                '`/add [amount] [description]`\n\n' +
+                'Example: `/add 20 lunch`',
+                { parse_mode: 'Markdown' }
+            );
             return;
         }
         
