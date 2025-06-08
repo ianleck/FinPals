@@ -61,14 +61,25 @@ function parseReceiptText(text: string): ReceiptData {
         /\$?([\d,]+\.\d{2})(?:\s|$)/g
     ];
     
-    // Also check if the AI literally returned "TOTAL: $XX.XX" as instructed
-    const directTotalMatch = text.match(/TOTAL:\s*\$?([\d,]+\.?\d*)/i);
-    if (directTotalMatch) {
-        const amount = parseFloat(directTotalMatch[1].replace(',', ''));
+    // First check for simple number patterns in text like "total of 78.87"
+    const simpleNumberMatch = text.match(/(?:total|amount|sum)\s+(?:of|is|:)?\s*\$?([\d,]+\.?\d*)/i);
+    if (simpleNumberMatch) {
+        const amount = parseFloat(simpleNumberMatch[1].replace(',', ''));
         if (amount > 0) {
             data.totalAmount = amount;
-            console.log('Found direct total amount:', data.totalAmount);
-            return data;
+            console.log('Found total amount from simple pattern:', data.totalAmount);
+        }
+    }
+    
+    // Also check if the AI literally returned "TOTAL: $XX.XX" as instructed
+    if (!data.totalAmount) {
+        const directTotalMatch = text.match(/TOTAL:\s*\$?([\d,]+\.?\d*)/i);
+        if (directTotalMatch) {
+            const amount = parseFloat(directTotalMatch[1].replace(',', ''));
+            if (amount > 0) {
+                data.totalAmount = amount;
+                console.log('Found direct total amount:', data.totalAmount);
+            }
         }
     }
     
@@ -149,7 +160,9 @@ export async function handleReceiptUpload(ctx: Context, db: D1Database, env: any
         const receiptData = await processReceiptImage(fileUrl, env);
         
         // Delete processing message
-        await ctx.api.deleteMessage(ctx.chat!.id, processingMsg.message_id);
+        if (ctx.chat?.id && processingMsg?.message_id) {
+            await ctx.api.deleteMessage(ctx.chat.id, processingMsg.message_id);
+        }
         
         if (!receiptData.totalAmount) {
             await ctx.reply(
@@ -174,10 +187,9 @@ export async function handleReceiptUpload(ctx: Context, db: D1Database, env: any
         };
         
         // Update context with simulated message
-        const newCtx = {
-            ...ctx,
+        const newCtx = Object.assign(Object.create(Object.getPrototypeOf(ctx)), ctx, {
             message: simulatedMessage
-        };
+        });
         
         // Show receipt details
         let receiptInfo = `📄 <b>Receipt Detected</b>\n\n`;
