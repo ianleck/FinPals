@@ -15,9 +15,12 @@ export async function processReceiptImage(
     env: any
 ): Promise<ReceiptData> {
     try {
+        // Fetch image and convert to Uint8Array
+        const imageArray = await fetchImageAsUint8Array(imageUrl);
+        
         // Use Cloudflare AI Workers for OCR
         const response = await env.AI.run('@cf/llava-hf/llava-1.5-7b-hf', {
-            image: [await fetchImageAsArrayBuffer(imageUrl)],
+            image: [...imageArray], // Convert Uint8Array to regular array
             prompt: 'Extract receipt information from this image. List the total amount, vendor name, date, and individual items with prices. Format the response as structured text.',
             max_tokens: 512,
         });
@@ -30,9 +33,10 @@ export async function processReceiptImage(
     }
 }
 
-async function fetchImageAsArrayBuffer(url: string): Promise<ArrayBuffer> {
+async function fetchImageAsUint8Array(url: string): Promise<Uint8Array> {
     const response = await fetch(url);
-    return await response.arrayBuffer();
+    const arrayBuffer = await response.arrayBuffer();
+    return new Uint8Array(arrayBuffer);
 }
 
 function parseReceiptText(text: string): ReceiptData {
