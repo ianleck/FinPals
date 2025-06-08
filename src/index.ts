@@ -4,7 +4,7 @@ import type { D1Database, DurableObjectNamespace } from '@cloudflare/workers-typ
 import { handleStart } from './commands/start';
 import { handleAddEnhanced as handleAdd } from './commands/add-enhanced';
 import { handleBalance } from './commands/balance';
-import { handleSettle } from './commands/settle';
+import { handleSettle, handleSettleCallback } from './commands/settle';
 import { handleStats } from './commands/stats';
 import { handleHelp } from './commands/help-enhanced';
 import { handleHistory } from './commands/history';
@@ -730,6 +730,11 @@ const worker = {
 			bot.callbackQuery('dismiss_budget_alert', async (ctx) => {
 				await ctx.answerCallbackQuery('Budget alert dismissed');
 				await ctx.deleteMessage();
+			});
+
+			// Handle settle button callback
+			bot.callbackQuery(/^settle_/, async (ctx) => {
+				await handleSettleCallback(ctx, env.DB);
 			});
 
 			// Handle expense details callback

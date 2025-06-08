@@ -12,12 +12,19 @@ export async function handleSettle(ctx: Context, db: D1Database) {
 	const message = ctx.message?.text || '';
 	const args = message.split(' ').slice(1); // Remove the /settle command
 
+	// If no arguments, show all unsettled balances
+	if (args.length === 0) {
+		await showUnsettledBalances(ctx, db);
+		return;
+	}
+
 	if (args.length < 2) {
 		await reply(ctx, 
 			'❌ Invalid format!\n\n' +
-			'Usage: /settle @username [amount]\n' +
-			'Example: /settle @john 25.50\n\n' +
-			'This records that you paid the mentioned user.',
+			'Usage:\n' +
+			'• /settle - Show all unsettled balances\n' +
+			'• /settle @username [amount] - Record a payment\n\n' +
+			'Example: /settle @john 25.50',
 			{ parse_mode: 'HTML' }
 		);
 		return;
@@ -155,5 +162,176 @@ export async function handleSettle(ctx: Context, db: D1Database) {
 	} catch (error) {
 		// Error recording settlement
 		await reply(ctx, ERROR_MESSAGES.DATABASE_ERROR);
+	}
+}
+
+async function showUnsettledBalances(ctx: Context, db: D1Database) {
+	const groupId = ctx.chat!.id.toString();
+
+	try {
+		// Get all unsettled balances in the group
+		const balances = await db.prepare(`
+			WITH expense_balances AS (
+				SELECT 
+					e.paid_by as creditor,
+					es.user_id as debtor,
+					SUM(es.amount) as amount
+				FROM expenses e
+				JOIN expense_splits es ON e.id = es.expense_id
+				WHERE e.group_id = ? AND e.deleted = FALSE
+				GROUP BY e.paid_by, es.user_id
+			),
+			settlement_balances AS (
+				SELECT 
+					to_user as creditor,
+					from_user as debtor,
+					SUM(amount) as amount
+				FROM settlements
+				WHERE group_id = ?
+				GROUP BY to_user, from_user
+			),
+			all_balances AS (
+				SELECT creditor, debtor, amount FROM expense_balances
+				UNION ALL
+				SELECT creditor, debtor, -amount FROM settlement_balances
+			),
+			net_balances AS (
+				SELECT 
+					CASE WHEN creditor < debtor THEN creditor ELSE debtor END as user1,
+					CASE WHEN creditor < debtor THEN debtor ELSE creditor END as user2,
+					SUM(CASE WHEN creditor < debtor THEN amount ELSE -amount END) as net_amount
+				FROM all_balances
+				WHERE creditor != debtor
+				GROUP BY user1, user2
+				HAVING ABS(net_amount) > 0.01
+			)
+			SELECT 
+				nb.*,
+				u1.username as user1_username,
+				u1.first_name as user1_first_name,
+				u2.username as user2_username,
+				u2.first_name as user2_first_name
+			FROM net_balances nb
+			LEFT JOIN users u1 ON nb.user1 = u1.telegram_id
+			LEFT JOIN users u2 ON nb.user2 = u2.telegram_id
+			ORDER BY ABS(net_amount) DESC
+		`).bind(groupId, groupId).all();
+
+		if (!balances.results || balances.results.length === 0) {
+			await reply(ctx, '✅ All settled up! No outstanding balances.');
+			return;
+		}
+
+		let message = '💳 <b>Unsettled Balances</b>\n\n';
+		const inlineButtons = [];
+
+		for (const balance of balances.results) {
+			const user1Name = (balance.user1_username as string) || (balance.user1_first_name as string) || 'User';
+			const user2Name = (balance.user2_username as string) || (balance.user2_first_name as string) || 'User';
+			const amount = Math.abs(balance.net_amount as number);
+
+			let owerId: string;
+			let owerName: string;
+			let owedId: string;
+			let owedName: string;
+
+			if ((balance.net_amount as number) > 0) {
+				// user2 owes user1
+				owerId = balance.user2 as string;
+				owerName = user2Name;
+				owedId = balance.user1 as string;
+				owedName = user1Name;
+			} else {
+				// user1 owes user2
+				owerId = balance.user1 as string;
+				owerName = user1Name;
+				owedId = balance.user2 as string;
+				owedName = user2Name;
+			}
+
+			message += `@${owerName} owes @${owedName}: <b>$${amount.toFixed(2)}</b>\n`;
+
+			// Create settle button with format: settle_{owerId}_{owedId}_{amount}
+			const buttonText = `💰 Settle $${amount.toFixed(2)}`;
+			const callbackData = `settle_${owerId}_${owedId}_${amount.toFixed(2)}`;
+			
+			// Add button for this balance
+			inlineButtons.push([{ text: buttonText, callback_data: callbackData }]);
+		}
+
+		message += '\nClick a button below to settle a specific balance:';
+
+		await reply(ctx, message, {
+			parse_mode: 'HTML',
+			reply_markup: {
+				inline_keyboard: inlineButtons
+			}
+		});
+
+	} catch (error) {
+		console.error('Error showing unsettled balances:', error);
+		await reply(ctx, ERROR_MESSAGES.DATABASE_ERROR);
+	}
+}
+
+export async function handleSettleCallback(ctx: Context, db: D1Database) {
+	if (!ctx.callbackQuery?.data) return;
+	const parts = ctx.callbackQuery.data.split('_');
+	const owerId = parts[1];
+	const owedId = parts[2];
+	const amount = parseFloat(parts[3]);
+	
+	const currentUserId = ctx.from!.id.toString();
+	
+	// Only allow the person who owes money to confirm the settlement
+	if (currentUserId !== owerId) {
+		await ctx.answerCallbackQuery('Only the person who owes can settle this balance');
+		return;
+	}
+	
+	await ctx.answerCallbackQuery();
+	
+	// Create a simulated settle command
+	const groupId = ctx.chat?.id.toString();
+	if (!groupId) return;
+	
+	// Get usernames for the settlement
+	const users = await db.prepare(`
+		SELECT telegram_id, username, first_name
+		FROM users
+		WHERE telegram_id IN (?, ?)
+	`).bind(owerId, owedId).all();
+	
+	const owerUser = users.results.find(u => u.telegram_id === owerId);
+	const owedUser = users.results.find(u => u.telegram_id === owedId);
+	
+	const owerName = owerUser?.username || owerUser?.first_name || 'User';
+	const owedName = owedUser?.username || owedUser?.first_name || 'User';
+	
+	// Record the settlement
+	const settlementId = crypto.randomUUID();
+	await db.prepare(
+		'INSERT INTO settlements (id, group_id, from_user, to_user, amount, created_by) VALUES (?, ?, ?, ?, ?, ?)'
+	).bind(settlementId, groupId, owerId, owedId, amount, currentUserId).run();
+	
+	// Update the message
+	await ctx.editMessageText(
+		`💰 <b>Settlement Recorded</b>\n\n` +
+		`@${owerName} paid @${owedName}: <b>$${amount.toFixed(2)}</b>\n\n` +
+		`✅ This balance has been settled!`,
+		{ parse_mode: 'HTML' }
+	);
+	
+	// Send notification to the person who received the payment
+	try {
+		await ctx.api.sendMessage(
+			owedId,
+			`💰 <b>Payment Received!</b>\n\n` +
+			`@${owerName} paid you <b>$${amount.toFixed(2)}</b>\n` +
+			`Group: ${ctx.chat?.title || 'your group'}`,
+			{ parse_mode: 'HTML' }
+		);
+	} catch (error) {
+		// User might have blocked the bot
 	}
 }
