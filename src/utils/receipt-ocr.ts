@@ -21,14 +21,15 @@ export async function processReceiptImage(
         // Use Cloudflare AI Workers for OCR
         const response = await env.AI.run('@cf/llava-hf/llava-1.5-7b-hf', {
             image: [...imageArray], // Convert Uint8Array to regular array
-            prompt: 'This is a receipt image. Please extract and list: 1) The total amount paid (look for TOTAL, AMOUNT DUE, or the largest price), 2) The vendor/store name, 3) The date if visible. Start your response with "TOTAL: $XX.XX" if you can find the total amount.',
+            prompt: 'Analyze this receipt image and extract the total amount. Look for words like TOTAL, AMOUNT DUE, BALANCE, or the largest number on the receipt. Reply with the actual dollar amount found. For example, if the total is $45.67, write "TOTAL: $45.67". Also mention the vendor name if visible.',
             max_tokens: 512,
         });
 
         console.log('LLaVA response:', response);
 
         // Parse the AI response to extract receipt data
-        const responseText = response.response || response.text || '';
+        // The response might be in different fields depending on the model
+        const responseText = response.description || response.response || response.text || JSON.stringify(response);
         console.log('Response text to parse:', responseText);
         
         return parseReceiptText(responseText);
@@ -51,22 +52,36 @@ function parseReceiptText(text: string): ReceiptData {
     
     // Extract total amount - look for various patterns
     const totalPatterns = [
-        /(?:total|amount|sum|due|grand\s*total)[\s:]*\$?([\d,]+\.?\d*)/i,
-        /\$?([\d,]+\.?\d*)[\s]*(?:total|amount|sum|due)/i,
-        /(?:pay|charge|charged)[\s:]*\$?([\d,]+\.?\d*)/i,
-        /\b\$?([\d,]+\.\d{2})\b.*(?:total|sum|due)/i,
-        /(?:total|sum|due).*\$?([\d,]+\.\d{2})\b/i,
+        /(?:total|amount|sum|due|grand\s*total)[\s:]*\$?([\d,]+\.?\d*)/gi,
+        /\$?([\d,]+\.?\d*)[\s]*(?:total|amount|sum|due)/gi,
+        /(?:pay|charge|charged)[\s:]*\$?([\d,]+\.?\d*)/gi,
+        /\b\$?([\d,]+\.\d{2})\b.*(?:total|sum|due)/gi,
+        /(?:total|sum|due).*\$?([\d,]+\.\d{2})\b/gi,
         // Look for standalone currency amounts that might be totals
         /\$?([\d,]+\.\d{2})(?:\s|$)/g
     ];
     
+    // Also check if the AI literally returned "TOTAL: $XX.XX" as instructed
+    const directTotalMatch = text.match(/TOTAL:\s*\$?([\d,]+\.?\d*)/i);
+    if (directTotalMatch) {
+        const amount = parseFloat(directTotalMatch[1].replace(',', ''));
+        if (amount > 0) {
+            data.totalAmount = amount;
+            console.log('Found direct total amount:', data.totalAmount);
+            return data;
+        }
+    }
+    
+    // Try other patterns
     for (const pattern of totalPatterns) {
-        const matches = text.matchAll(pattern);
+        const match = pattern.global ? [...text.matchAll(pattern)] : [text.match(pattern)].filter(Boolean);
         const amounts = [];
-        for (const match of matches) {
-            const amount = parseFloat(match[1].replace(',', ''));
-            if (amount > 0) {
-                amounts.push(amount);
+        for (const m of match) {
+            if (m && m[1]) {
+                const amount = parseFloat(m[1].replace(',', ''));
+                if (amount > 0 && !isNaN(amount)) {
+                    amounts.push(amount);
+                }
             }
         }
         
