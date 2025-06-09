@@ -210,22 +210,12 @@ const worker = {
 
 			// Handle voice messages
 			bot.on('message:voice', async (ctx) => {
-				console.log('Voice message event triggered');
 				// Only process in groups or when it's a reply to the bot
 				const isGroup = ctx.chat?.type !== 'private';
 				const isReplyToBot = ctx.message?.reply_to_message?.from?.id === ctx.me.id;
 				
-				console.log('Voice message context:', {
-					isGroup,
-					isReplyToBot,
-					chatType: ctx.chat?.type,
-					chatId: ctx.chat?.id,
-					fromId: ctx.from?.id
-				});
-				
 				if (isGroup || isReplyToBot) {
 					try {
-						console.log('Calling handleVoiceMessage...');
 						await handleVoiceMessage(ctx, env.DB, env);
 					} catch (error) {
 						console.error('Voice message error:', error);
@@ -238,8 +228,6 @@ const worker = {
 							{ parse_mode: 'Markdown' }
 						);
 					}
-				} else {
-					console.log('Voice message ignored - not in group and not reply to bot');
 				}
 			});
 
@@ -361,6 +349,13 @@ const worker = {
 						'This means you paid John $25.',
 					{ parse_mode: 'HTML' }
 				);
+			});
+
+			// Handle show settle balances callback
+			bot.callbackQuery('show_settle_balances', async (ctx) => {
+				await ctx.answerCallbackQuery();
+				const { showUnsettledBalances } = await import('./commands/settle');
+				await showUnsettledBalances(ctx, env.DB);
 			});
 
 			// Handle edit split callback (for future implementation)

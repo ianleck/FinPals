@@ -208,7 +208,7 @@ export async function handleBalance(ctx: Context, db: D1Database, tripId?: strin
 			parse_mode: 'HTML',
 			reply_markup: {
 				inline_keyboard: [
-					[{ text: '💸 Settle Up', callback_data: 'settle_help' }],
+					[{ text: '💸 Settle Up', callback_data: 'show_settle_balances' }],
 					[{ text: '📊 View History', callback_data: 'view_history' }],
 				],
 			},

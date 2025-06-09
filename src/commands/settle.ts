@@ -165,7 +165,7 @@ export async function handleSettle(ctx: Context, db: D1Database) {
 	}
 }
 
-async function showUnsettledBalances(ctx: Context, db: D1Database) {
+export async function showUnsettledBalances(ctx: Context, db: D1Database) {
 	const groupId = ctx.chat!.id.toString();
 
 	try {
