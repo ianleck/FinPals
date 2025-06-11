@@ -94,8 +94,8 @@ describe('handlePersonal command', () => {
 			await handlePersonal(ctx, db);
 
 			const { text } = extractReplyContent(ctx);
-			// Verify categories and amounts are shown
-			expect(text).toContain('Food & Dining');
+			// Verify categories and amounts are shown (with HTML entities escaped)
+			expect(text).toContain('Food &amp; Dining');
 			expect(text).toContain('Transport');
 			expect(text).toContain('Groceries');
 			expect(text).toContain('Entertainment');

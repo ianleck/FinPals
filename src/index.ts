@@ -340,6 +340,72 @@ const worker = {
 				await handleSummary(ctx, env.DB);
 			});
 
+			bot.callbackQuery('budget_set_help', async (ctx) => {
+				await ctx.answerCallbackQuery();
+				await ctx.reply(
+					'📝 <b>Setting a Budget</b>\n\n' +
+					'Use: <code>/budget set [category] [amount] [period]</code>\n\n' +
+					'<b>Categories:</b>\n' +
+					'• Food & Dining\n' +
+					'• Transportation\n' +
+					'• Entertainment\n' +
+					'• Shopping\n' +
+					'• Bills & Utilities\n' +
+					'• And more...\n\n' +
+					'<b>Periods:</b> daily, weekly, monthly\n\n' +
+					'<b>Examples:</b>\n' +
+					'<code>/budget set "Food & Dining" 500 monthly</code>\n' +
+					'<code>/budget set Transportation 50 daily</code>',
+					{ parse_mode: 'HTML' }
+				);
+			});
+
+			bot.callbackQuery('spending_report', async (ctx) => {
+				await ctx.answerCallbackQuery();
+				const userId = ctx.from.id.toString();
+				
+				try {
+					const { getBudgetsWithSpending } = await import('./utils/budget-helpers');
+					const { formatCurrency } = await import('./utils/currency');
+					const budgets = await getBudgetsWithSpending(env.DB, userId);
+					
+					if (!budgets || budgets.length === 0) {
+						await ctx.reply('📊 No budget data available. Set up budgets first!');
+						return;
+					}
+					
+					let message = '📊 <b>Spending Report</b>\n\n';
+					
+					for (const budget of budgets) {
+						const emoji = budget.percentage >= 100 ? '🔴' : budget.percentage >= 80 ? '🟡' : '🟢';
+						const remaining = Math.max(0, budget.amount - budget.spent);
+						
+						message += `${emoji} <b>${budget.category}</b>\n`;
+						message += `   Budget: ${formatCurrency(budget.amount, budget.currency)} ${budget.period}\n`;
+						message += `   Spent: ${formatCurrency(budget.spent, budget.currency)} (${budget.percentage}%)\n`;
+						message += `   Remaining: ${formatCurrency(remaining, budget.currency)}\n\n`;
+					}
+					
+					await ctx.reply(message, { 
+						parse_mode: 'HTML',
+						reply_markup: {
+							inline_keyboard: [
+								[{ text: '💰 Budget Menu', callback_data: 'budget_menu' }],
+								[{ text: '❌ Close', callback_data: 'close' }]
+							]
+						}
+					});
+				} catch (error) {
+					console.error('Error generating spending report:', error);
+					await ctx.reply('❌ Error generating report. Please try again.');
+				}
+			});
+
+			bot.callbackQuery('budget_menu', async (ctx) => {
+				await ctx.answerCallbackQuery();
+				await handleBudget(ctx, env.DB);
+			});
+
 			bot.callbackQuery('settle_help', async (ctx) => {
 				await ctx.answerCallbackQuery();
 				await ctx.reply(

@@ -1,5 +1,15 @@
 import { Context } from 'grammy';
 
+// HTML escape function to prevent parsing errors
+function escapeHtml(text: string): string {
+	return text
+		.replace(/&/g, '&amp;')
+		.replace(/</g, '&lt;')
+		.replace(/>/g, '&gt;')
+		.replace(/"/g, '&quot;')
+		.replace(/'/g, '&#039;');
+}
+
 export async function handlePersonal(ctx: Context, db: D1Database) {
 	// Only work in private chats
 	if (ctx.chat?.type !== 'private') {
@@ -116,10 +126,10 @@ export async function handlePersonal(ctx: Context, db: D1Database) {
 			for (const balance of balances.results) {
 				const amount = balance.net_balance as number;
 				if (amount > 0) {
-					message += `✅ ${balance.group_name}: You're owed $${amount.toFixed(2)}\n`;
+					message += `✅ ${escapeHtml(balance.group_name as string)}: You're owed $${amount.toFixed(2)}\n`;
 					totalOwed += amount;
 				} else {
-					message += `❌ ${balance.group_name}: You owe $${Math.abs(amount).toFixed(2)}\n`;
+					message += `❌ ${escapeHtml(balance.group_name as string)}: You owe $${Math.abs(amount).toFixed(2)}\n`;
 					totalOwing += Math.abs(amount);
 				}
 			}
@@ -140,7 +150,7 @@ export async function handlePersonal(ctx: Context, db: D1Database) {
 			for (const group of spending.results) {
 				const total = group.total_paid as number;
 				totalSpent += total;
-				message += `• ${group.group_name}: $${total.toFixed(2)} (${group.expense_count} expenses)\n`;
+				message += `• ${escapeHtml(group.group_name as string)}: $${total.toFixed(2)} (${group.expense_count} expenses)\n`;
 			}
 
 			message += `\nTotal spent: $${totalSpent.toFixed(2)}\n\n`;
@@ -153,7 +163,7 @@ export async function handlePersonal(ctx: Context, db: D1Database) {
 
 			for (const cat of categories.results) {
 				const percentage = ((cat.total as number / totalCategorized) * 100).toFixed(1);
-				message += `• ${cat.category}: $${(cat.total as number).toFixed(2)} (${percentage}%)\n`;
+				message += `• ${escapeHtml(cat.category as string)}: $${(cat.total as number).toFixed(2)} (${percentage}%)\n`;
 			}
 			message += '\n';
 		}
@@ -171,7 +181,7 @@ export async function handlePersonal(ctx: Context, db: D1Database) {
 
 				for (const cat of personalCategories.results) {
 					const percentage = ((cat.total as number / totalPersonal) * 100).toFixed(1);
-					message += `• ${cat.category}: $${(cat.total as number).toFixed(2)} (${percentage}%)\n`;
+					message += `• ${escapeHtml(cat.category as string)}: $${(cat.total as number).toFixed(2)} (${percentage}%)\n`;
 				}
 			}
 		}
