@@ -10,20 +10,77 @@ export async function handleDelete(ctx: Context, db: D1Database) {
 
 	const message = ctx.message?.text || '';
 	const args = message.split(/[\s_]+/).slice(1); // Handle both /delete id and /delete_id formats
+	const groupId = ctx.chat!.id.toString();
+	const userId = ctx.from!.id.toString();
 
+	// If no args provided, show recent expenses to choose from
 	if (args.length === 0) {
-		await ctx.reply(
-			'❌ Please provide an expense ID to delete.\n\n' +
-			'Usage: /delete [expense_id]\n' +
-			'Find expense IDs using /expenses',
-			{ parse_mode: 'HTML' }
-		);
-		return;
+		try {
+			// Get recent expenses
+			const recentExpenses = await db.prepare(`
+				SELECT 
+					e.id,
+					e.description,
+					e.amount,
+					e.created_by,
+					e.currency,
+					e.created_at,
+					u.username,
+					u.first_name
+				FROM expenses e
+				JOIN users u ON e.created_by = u.telegram_id
+				WHERE e.group_id = ? AND e.deleted = FALSE
+				ORDER BY e.created_at DESC
+				LIMIT 10
+			`).bind(groupId).all();
+
+			if (!recentExpenses.results || recentExpenses.results.length === 0) {
+				await ctx.reply('📭 No expenses found in this group.');
+				return;
+			}
+
+			// Format the list of recent expenses
+			let message = '🗑️ <b>Select an expense to delete:</b>\n\n';
+			const buttons: any[][] = [];
+			
+			recentExpenses.results.forEach((expense: any, index: number) => {
+				const creatorName = expense.username ? `@${expense.username}` : expense.first_name || 'Unknown';
+				const date = new Date(expense.created_at).toLocaleDateString();
+				const canDelete = expense.created_by === userId ? ' ✅' : '';
+				
+				message += `<code>${expense.id}</code> - ${expense.description}\n`;
+				message += `   💰 ${expense.currency}${expense.amount.toFixed(2)} by ${creatorName}${canDelete}\n`;
+				message += `   📅 ${date}\n\n`;
+				
+				// Add delete button if user can delete this expense
+				if (expense.created_by === userId) {
+					buttons.push([{
+						text: `🗑️ ${expense.id}: ${expense.description.substring(0, 20)}${expense.description.length > 20 ? '...' : ''}`,
+						callback_data: `delete_${expense.id}`
+					}]);
+				}
+			});
+
+			message += '💡 <i>Use:</i> <code>/delete [ID]</code> <i>to delete</i>\n';
+			message += '✅ <i>= You can delete this expense</i>';
+
+			const replyOptions: any = { parse_mode: 'HTML' };
+			if (buttons.length > 0) {
+				replyOptions.reply_markup = {
+					inline_keyboard: buttons
+				};
+			}
+
+			await ctx.reply(message, replyOptions);
+			return;
+		} catch (error) {
+			console.error('Error fetching recent expenses:', error);
+			await ctx.reply(ERROR_MESSAGES.DATABASE_ERROR);
+			return;
+		}
 	}
 
 	const expenseId = args[0];
-	const groupId = ctx.chat.id.toString();
-	const userId = ctx.from!.id.toString();
 
 	try {
 		// Check if expense exists and user has permission to delete
@@ -50,7 +107,7 @@ export async function handleDelete(ctx: Context, db: D1Database) {
 		let isAdmin = false;
 
 		try {
-			const member = await ctx.getChatMember(userId);
+			const member = await ctx.getChatMember(parseInt(userId));
 			isAdmin = member.status === 'administrator' || member.status === 'creator';
 		} catch {
 			// Ignore permission check errors

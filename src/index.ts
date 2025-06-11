@@ -572,6 +572,79 @@ const worker = {
 				}
 			});
 
+			// Handle delete callback from delete command list
+			bot.callbackQuery(/^delete_/, async (ctx) => {
+				await ctx.answerCallbackQuery();
+				
+				const expenseId = ctx.callbackQuery.data.split('_')[1];
+				const groupId = ctx.chat!.id.toString();
+				const userId = ctx.from.id.toString();
+
+				try {
+					// Check if expense exists and user has permission to delete
+					const expense = await env.DB.prepare(`
+						SELECT 
+							e.id, 
+							e.description, 
+							e.amount,
+							e.created_by,
+							u.username,
+							u.first_name
+						FROM expenses e
+						JOIN users u ON e.created_by = u.telegram_id
+						WHERE e.id = ? AND e.group_id = ? AND e.deleted = FALSE
+					`).bind(expenseId, groupId).first();
+
+					if (!expense) {
+						await ctx.editMessageText('❌ Expense not found or already deleted.');
+						return;
+					}
+
+					// Only allow creator or admins to delete
+					const isCreator = expense.created_by === userId;
+					let isAdmin = false;
+
+					try {
+						const member = await ctx.getChatMember(parseInt(userId));
+						isAdmin = member.status === 'administrator' || member.status === 'creator';
+					} catch {
+						// Ignore permission check errors
+					}
+
+					if (!isCreator && !isAdmin) {
+						const creatorName = expense.username || expense.first_name || 'Unknown';
+						await ctx.answerCallbackQuery();
+						await ctx.editMessageText(
+							`❌ Only @${creatorName} or admins can delete this expense`
+						);
+						return;
+					}
+
+					// Soft delete the expense
+					await env.DB.prepare(
+						'UPDATE expenses SET deleted = TRUE WHERE id = ?'
+					).bind(expenseId).run();
+
+					await ctx.editMessageText(
+						`✅ <b>Expense Deleted</b>\n\n` +
+						`"${expense.description}" - $${(expense.amount as number).toFixed(2)}\n\n` +
+						`The balances have been updated.`,
+						{
+							parse_mode: 'HTML',
+							reply_markup: {
+								inline_keyboard: [
+									[{ text: '📊 View Balance', callback_data: 'view_balance' }],
+									[{ text: '📜 View History', callback_data: 'view_history' }]
+								]
+							}
+						}
+					);
+				} catch (error) {
+					console.error('Error deleting expense:', error);
+					await ctx.answerCallbackQuery('Error deleting expense');
+				}
+			});
+
 			// Handle category change callback
 			bot.callbackQuery(/^cat:/, async (ctx) => {
 				const parts = ctx.callbackQuery.data.split(':');
