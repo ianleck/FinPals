@@ -65,7 +65,7 @@ export async function handleTemplates(ctx: Context, db: D1Database) {
         }
 
         // Display templates
-        await displayTemplates(ctx, templates.results as ExpenseTemplate[]);
+        await displayTemplates(ctx, templates.results as unknown as ExpenseTemplate[]);
 
     } catch (error) {
         await reply(ctx, ERROR_MESSAGES.DATABASE_ERROR);

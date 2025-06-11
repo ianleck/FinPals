@@ -39,21 +39,31 @@ export async function handleDelete(ctx: Context, db: D1Database) {
 				return;
 			}
 
+			// Check if user is admin
+			let isAdmin = false;
+			try {
+				const member = await ctx.getChatMember(parseInt(userId));
+				isAdmin = member.status === 'administrator' || member.status === 'creator';
+			} catch {
+				// Ignore permission check errors
+			}
+
 			// Format the list of recent expenses
 			let message = '🗑️ <b>Select an expense to delete:</b>\n\n';
 			const buttons: any[][] = [];
 			
-			recentExpenses.results.forEach((expense: any, index: number) => {
+			recentExpenses.results.forEach((expense: any) => {
 				const creatorName = expense.username ? `@${expense.username}` : expense.first_name || 'Unknown';
 				const date = new Date(expense.created_at).toLocaleDateString();
-				const canDelete = expense.created_by === userId ? ' ✅' : '';
+				const canDelete = expense.created_by === userId || isAdmin;
+				const deleteIcon = canDelete ? ' ✅' : '';
 				
 				message += `<code>${expense.id}</code> - ${expense.description}\n`;
-				message += `   💰 ${expense.currency}${expense.amount.toFixed(2)} by ${creatorName}${canDelete}\n`;
+				message += `   💰 ${expense.currency}${expense.amount.toFixed(2)} by ${creatorName}${deleteIcon}\n`;
 				message += `   📅 ${date}\n\n`;
 				
 				// Add delete button if user can delete this expense
-				if (expense.created_by === userId) {
+				if (canDelete) {
 					buttons.push([{
 						text: `🗑️ ${expense.id}: ${expense.description.substring(0, 20)}${expense.description.length > 20 ? '...' : ''}`,
 						callback_data: `delete_${expense.id}`

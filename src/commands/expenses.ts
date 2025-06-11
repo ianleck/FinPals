@@ -128,7 +128,8 @@ export async function showExpensesPage(ctx: Context, expenses: any[], page: numb
 
 // Handle expense selection for actions
 export async function handleExpenseSelection(ctx: Context, db: D1Database) {
-	const [_, pageStr, idxStr] = ctx.callbackQuery!.data.split(':');
+	const callbackData = ctx.callbackQuery?.data || '';
+	const [_, pageStr, idxStr] = callbackData.split(':');
 	const page = parseInt(pageStr);
 	const idx = parseInt(idxStr);
 	const groupId = ctx.chat?.id.toString();

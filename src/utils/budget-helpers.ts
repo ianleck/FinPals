@@ -1,10 +1,12 @@
 import { D1Database } from '@cloudflare/workers-types';
+import { convertCurrencySync, refreshRatesCache } from './currency';
 
 export interface BudgetWithSpending {
 	id: number;
 	user_id: string;
 	category: string;
 	amount: number;
+	currency: string;
 	period: 'daily' | 'weekly' | 'monthly';
 	created_at: string;
 	spent: number;
@@ -19,30 +21,41 @@ export async function getBudgetsWithSpending(
 	db: D1Database,
 	userId: string
 ): Promise<BudgetWithSpending[]> {
+	// Refresh currency cache before calculations
+	await refreshRatesCache(db);
+	
+	// First get the raw data with expenses
 	const results = await db.prepare(`
 		WITH budget_periods AS (
 			SELECT 
-				id,
-				user_id,
-				category,
-				amount,
-				period,
-				created_at,
+				b.id,
+				b.user_id,
+				b.category,
+				b.amount,
+				COALESCE(b.currency, u.preferred_currency, 'USD') as currency,
+				b.period,
+				b.created_at,
 				CASE 
-					WHEN period = 'daily' THEN datetime('now', '-1 day')
-					WHEN period = 'weekly' THEN datetime('now', '-7 days')
-					WHEN period = 'monthly' THEN datetime('now', '-1 month')
+					WHEN b.period = 'daily' THEN datetime('now', '-1 day')
+					WHEN b.period = 'weekly' THEN datetime('now', '-7 days')
+					WHEN b.period = 'monthly' THEN datetime('now', '-1 month')
 				END as period_start
-			FROM budgets
-			WHERE user_id = ?
+			FROM budgets b
+			LEFT JOIN users u ON b.user_id = u.telegram_id
+			WHERE b.user_id = ?
 		),
-		spending_data AS (
+		expense_data AS (
 			SELECT 
-				bp.*,
-				COALESCE(SUM(CASE 
+				bp.id as budget_id,
+				bp.currency as budget_currency,
+				e.amount as expense_amount,
+				e.currency as expense_currency,
+				es.amount as split_amount,
+				e.is_personal,
+				CASE 
 					WHEN e.is_personal = TRUE THEN e.amount
 					ELSE es.amount
-				END), 0) as spent
+				END as user_amount
 			FROM budget_periods bp
 			LEFT JOIN expenses e ON 
 				LOWER(TRIM(e.category)) = LOWER(TRIM(bp.category))
@@ -56,16 +69,59 @@ export async function getBudgetsWithSpending(
 				es.expense_id = e.id 
 				AND es.user_id = bp.user_id
 				AND e.is_personal = FALSE
-			GROUP BY bp.id
+			WHERE e.id IS NOT NULL
 		)
 		SELECT 
-			*,
-			ROUND((spent / amount) * 100, 0) as percentage
-		FROM spending_data
-		ORDER BY category
+			bp.*,
+			ed.expense_currency,
+			ed.user_amount
+		FROM budget_periods bp
+		LEFT JOIN expense_data ed ON bp.id = ed.budget_id
+		ORDER BY bp.category
 	`).bind(userId).all();
 
-	return results.results as BudgetWithSpending[];
+	// Process results to convert currencies and calculate spending
+	const budgetMap = new Map<number, BudgetWithSpending>();
+	
+	for (const row of results.results || []) {
+		const budgetId = row.id as number;
+		
+		if (!budgetMap.has(budgetId)) {
+			budgetMap.set(budgetId, {
+				id: budgetId,
+				user_id: row.user_id as string,
+				category: row.category as string,
+				amount: row.amount as number,
+				currency: row.currency as string,
+				period: row.period as 'daily' | 'weekly' | 'monthly',
+				created_at: row.created_at as string,
+				spent: 0,
+				percentage: 0
+			});
+		}
+		
+		const budget = budgetMap.get(budgetId)!;
+		
+		// Convert expense amount to budget currency if needed
+		if (row.user_amount && row.expense_currency) {
+			const convertedAmount = row.expense_currency === budget.currency
+				? row.user_amount as number
+				: convertCurrencySync(
+					row.user_amount as number,
+					row.expense_currency as string,
+					budget.currency
+				);
+			budget.spent += convertedAmount;
+		}
+	}
+	
+	// Calculate percentages and return as array
+	const budgets = Array.from(budgetMap.values());
+	for (const budget of budgets) {
+		budget.percentage = Math.round((budget.spent / budget.amount) * 100);
+	}
+	
+	return budgets.sort((a, b) => a.category.localeCompare(b.category));
 }
 
 /**
@@ -152,7 +208,7 @@ export async function checkBudgetLimits(
 
 	if (!budget) return { warning: false, message: null };
 
-	const newTotal = (budget.current_spent as number) + amount;
+	const newTotal = (budget.current_spent as number) + (amount || 0);
 	const budgetAmount = budget.amount as number;
 	const percentage = (newTotal / budgetAmount) * 100;
 

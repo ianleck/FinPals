@@ -7,8 +7,8 @@ export async function handleExport(ctx: Context, db: D1Database) {
 		return;
 	}
 
-	const groupId = ctx.chat.id.toString();
-	const groupName = ctx.chat.title || 'Group';
+	const groupId = ctx.chat!.id.toString();
+	const groupName = ctx.chat!.title || 'Group';
 
 	try {
 		// Get all expenses with full details

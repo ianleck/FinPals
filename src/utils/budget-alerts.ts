@@ -1,6 +1,6 @@
 import { Bot, Context } from 'grammy';
 import type { D1Database } from '@cloudflare/workers-types';
-import { formatCurrency } from './currency';
+import { formatCurrency, convertCurrencySync, refreshRatesCache } from './currency';
 import { EXPENSE_CATEGORIES } from './constants';
 
 interface BudgetAlert {
@@ -8,6 +8,7 @@ interface BudgetAlert {
     category: string;
     spent: number;
     limit: number;
+    currency: string;
     percentage: number;
     period: string;
     message: string;
@@ -18,15 +19,21 @@ export async function checkBudgetAlerts(
     userId: string,
     groupId?: string,
     newExpenseAmount?: number,
-    newExpenseCategory?: string
+    newExpenseCategory?: string,
+    newExpenseCurrency?: string
 ): Promise<BudgetAlert[]> {
     const alerts: BudgetAlert[] = [];
     
-    // Get user's budgets
+    // Refresh currency cache
+    await refreshRatesCache(db);
+    
+    // Get user's budgets with currency info
     const budgets = await db.prepare(`
-        SELECT * FROM budgets 
-        WHERE user_id = ? 
-        ORDER BY category
+        SELECT b.*, COALESCE(b.currency, u.preferred_currency, 'USD') as currency
+        FROM budgets b
+        LEFT JOIN users u ON b.user_id = u.telegram_id
+        WHERE b.user_id = ? 
+        ORDER BY b.category
     `).bind(userId).all();
     
     if (!budgets.results || budgets.results.length === 0) {
@@ -60,12 +67,14 @@ export async function checkBudgetAlerts(
                 continue;
         }
         
-        // Get spending in this category
+        const budgetCurrency = budget.currency as string;
+        
+        // Get spending in this category with currency info
         let query = `
-            SELECT COALESCE(SUM(amount), 0) as total
+            SELECT amount, currency
             FROM (
                 -- Personal expenses
-                SELECT amount 
+                SELECT amount, currency
                 FROM expenses 
                 WHERE paid_by = ? 
                     AND category = ? 
@@ -76,7 +85,7 @@ export async function checkBudgetAlerts(
                 UNION ALL
                 
                 -- Group expense splits
-                SELECT es.amount
+                SELECT es.amount, e.currency
                 FROM expense_splits es
                 JOIN expenses e ON e.id = es.expense_id
                 WHERE es.user_id = ? 
@@ -87,15 +96,26 @@ export async function checkBudgetAlerts(
             )
         `;
         
-        const spent = await db.prepare(query)
+        const expenses = await db.prepare(query)
             .bind(userId, category, startDate.toISOString(), userId, category, startDate.toISOString())
-            .first();
+            .all();
         
-        let currentSpent = (spent?.total as number) || 0;
+        // Convert all expenses to budget currency and sum
+        let currentSpent = 0;
+        for (const expense of expenses.results || []) {
+            const amount = expense.amount as number;
+            const currency = expense.currency as string || 'USD';
+            currentSpent += currency === budgetCurrency 
+                ? amount 
+                : convertCurrencySync(amount, currency, budgetCurrency);
+        }
         
         // Add the new expense if it's in this category
         if (newExpenseAmount && newExpenseCategory === category) {
-            currentSpent += newExpenseAmount;
+            const convertedAmount = (newExpenseCurrency && newExpenseCurrency !== budgetCurrency)
+                ? convertCurrencySync(newExpenseAmount, newExpenseCurrency, budgetCurrency)
+                : newExpenseAmount;
+            currentSpent += convertedAmount;
         }
         
         const percentage = (currentSpent / limit) * 100;
@@ -107,9 +127,10 @@ export async function checkBudgetAlerts(
                 category,
                 spent: currentSpent,
                 limit,
+                currency: budgetCurrency,
                 percentage,
                 period,
-                message: `🚨 Budget exceeded for ${category}! You've spent ${formatCurrency(currentSpent, 'USD')} of your ${formatCurrency(limit, 'USD')} ${period} budget.`
+                message: `🚨 Budget exceeded for ${category}! You've spent ${formatCurrency(currentSpent, budgetCurrency)} of your ${formatCurrency(limit, budgetCurrency)} ${period} budget.`
             });
         } else if (percentage >= 90) {
             alerts.push({
@@ -117,9 +138,10 @@ export async function checkBudgetAlerts(
                 category,
                 spent: currentSpent,
                 limit,
+                currency: budgetCurrency,
                 percentage,
                 period,
-                message: `⚠️ 90% of ${category} budget used! ${formatCurrency(currentSpent, 'USD')} of ${formatCurrency(limit, 'USD')} ${period} budget spent.`
+                message: `⚠️ 90% of ${category} budget used! ${formatCurrency(currentSpent, budgetCurrency)} of ${formatCurrency(limit, budgetCurrency)} ${period} budget spent.`
             });
         } else if (percentage >= 75) {
             alerts.push({
@@ -127,9 +149,10 @@ export async function checkBudgetAlerts(
                 category,
                 spent: currentSpent,
                 limit,
+                currency: budgetCurrency,
                 percentage,
                 period,
-                message: `💡 75% of ${category} budget used. ${formatCurrency(limit - currentSpent, 'USD')} remaining for this ${period}.`
+                message: `💡 75% of ${category} budget used. ${formatCurrency(limit - currentSpent, budgetCurrency)} remaining for this ${period}.`
             });
         }
     }

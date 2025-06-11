@@ -1,6 +1,7 @@
 import { Context } from 'grammy';
 import { ERROR_MESSAGES } from '../utils/constants';
 import { reply } from '../utils/reply';
+import { formatCurrency } from '../utils/currency';
 
 
 export async function handleBudget(ctx: Context, db: D1Database): Promise<void> {
@@ -160,11 +161,15 @@ async function setBudget(ctx: Context, db: D1Database, userId: string, args: str
 		return;
 	}
 
-	// Create or update budget
+	// Get user's preferred currency
+	const user = await db.prepare('SELECT preferred_currency FROM users WHERE telegram_id = ?').bind(userId).first();
+	const currency = user?.preferred_currency || 'USD';
+	
+	// Create or update budget with currency
 	await db.prepare(`
-		INSERT OR REPLACE INTO budgets (user_id, category, amount, period)
-		VALUES (?, ?, ?, ?)
-	`).bind(userId, category, amount, period).run();
+		INSERT OR REPLACE INTO budgets (user_id, category, amount, period, currency)
+		VALUES (?, ?, ?, ?, ?)
+	`).bind(userId, category, amount, period, currency).run();
 
 	const periodAbbrev = {
 		'daily': '/day',
@@ -175,7 +180,7 @@ async function setBudget(ctx: Context, db: D1Database, userId: string, args: str
 	await reply(ctx, 
 		`✅ <b>Budget Set!</b>\n\n` +
 		`📂 Category: ${category}\n` +
-		`💵 Amount: $${amount.toFixed(2)}${periodAbbrev}\n\n` +
+		`💵 Amount: ${formatCurrency(amount, currency as string)}${periodAbbrev}\n\n` +
 		`I'll track your ${category} expenses and notify you when you're close to your limit!`,
 		{ parse_mode: 'HTML' }
 	);

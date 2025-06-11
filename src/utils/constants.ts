@@ -2,7 +2,12 @@ export const BOT_USERNAME = '@FinPalsBot';
 
 export const DEFAULT_CURRENCY = 'USD';
 
-export const SUPPORTED_CURRENCIES = ['USD', 'EUR', 'GBP', 'JPY', 'CNY', 'SGD'];
+export const SUPPORTED_CURRENCIES = [
+	'USD', 'EUR', 'GBP', 'JPY', 'CNY', 'SGD', 'INR', 'AUD', 'CAD',
+	'KRW', 'THB', 'MYR', 'PHP', 'IDR', 'VND', 'HKD', 'TWD', 'NZD',
+	'CHF', 'SEK', 'NOK', 'DKK', 'ZAR', 'AED', 'SAR', 'BRL', 'MXN',
+	'TRY', 'RUB'
+];
 
 export const EXPENSE_CATEGORIES = [
 	'Food & Dining',

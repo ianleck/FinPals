@@ -25,6 +25,7 @@ import { COMMANDS, EXPENSE_CATEGORIES } from './utils/constants';
 import { processRecurringReminders } from './utils/recurring-reminders';
 import { handleReceiptUpload } from './utils/receipt-ocr';
 import { handleVoiceMessage } from './utils/voice-handler';
+import { updateExchangeRatesInDB } from './utils/currency';
 
 type MyContext = Context & SessionFlavor<SessionData> & { env: Env };
 
@@ -887,8 +888,23 @@ const worker = {
 	},
 	
 	async scheduled(_event: ScheduledEvent, env: Env, _ctx: ExecutionContext): Promise<void> {
-		// Process recurring expense reminders
 		try {
+			// Update exchange rates every 12 hours
+			const now = new Date();
+			const hour = now.getUTCHours();
+			
+			// Update rates at 9 AM and 9 PM UTC
+			if (hour === 9 || hour === 21) {
+				console.log('Updating exchange rates...');
+				const updated = await updateExchangeRatesInDB(env.DB);
+				if (updated) {
+					console.log('Exchange rates updated successfully');
+				} else {
+					console.error('Failed to update exchange rates');
+				}
+			}
+			
+			// Process recurring expense reminders (runs every cron trigger)
 			const bot = new Bot<MyContext>(env.BOT_TOKEN);
 			const stats = await processRecurringReminders(env.DB, bot);
 			console.log(`Recurring reminders processed: ${stats.sent} sent, ${stats.errors} errors`);

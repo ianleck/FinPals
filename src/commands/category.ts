@@ -26,7 +26,7 @@ export async function handleCategory(ctx: Context, db: D1Database) {
 
 	const expenseId = args[0];
 	const category = args.slice(1).join(' ');
-	const groupId = ctx.chat.id.toString();
+	const groupId = ctx.chat!.id.toString();
 
 	// Validate category
 	if (!EXPENSE_CATEGORIES.includes(category)) {
