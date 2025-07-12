@@ -180,8 +180,8 @@ const worker = {
 			bot.command(COMMANDS.TRIPS, (ctx) => handleTrips(ctx, env.DB));
 			bot.command(COMMANDS.BUDGET, (ctx) => handleBudget(ctx, env.DB));
 			bot.command(COMMANDS.TEMPLATES, (ctx) => handleTemplates(ctx, env.DB));
-			bot.command(COMMANDS.STATUS, (ctx) => handleStatus(ctx));
-			bot.command(COMMANDS.ENROLL_ALL, (ctx) => handleEnrollAll(ctx));
+			bot.command(COMMANDS.STATUS, (ctx) => handleStatus(ctx, env.DB));
+			bot.command(COMMANDS.ENROLL_ALL, (ctx) => handleEnrollAll(ctx, env.DB));
 			bot.command(COMMANDS.HELP, (ctx) => handleHelp(ctx, env.DB));
 			bot.command('test', (ctx) => handleTest(ctx));
 

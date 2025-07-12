@@ -1,9 +1,7 @@
 import { Context, Api } from 'grammy';
-import { Env } from '../index';
+import type { D1Database } from '@cloudflare/workers-types';
 
-type MyContext = Context & { env: Env };
-
-export async function enrollAllGroupMembers(ctx: MyContext, groupId: string): Promise<{ enrolled: number; failed: number }> {
+export async function enrollAllGroupMembers(ctx: Context, db: D1Database, groupId: string): Promise<{ enrolled: number; failed: number }> {
 	const api = ctx.api;
 	let enrolled = 0;
 	let failed = 0;
@@ -15,7 +13,7 @@ export async function enrollAllGroupMembers(ctx: MyContext, groupId: string): Pr
 		for (const admin of admins) {
 			if (!admin.user.is_bot) {
 				try {
-					await enrollUser(ctx, groupId, admin.user);
+					await enrollUser(ctx, db, groupId, admin.user);
 					enrolled++;
 				} catch (error) {
 					console.error(`Failed to enroll admin ${admin.user.id}:`, error);
@@ -35,44 +33,44 @@ export async function enrollAllGroupMembers(ctx: MyContext, groupId: string): Pr
 	}
 }
 
-export async function enrollUser(ctx: MyContext, groupId: string, user: any): Promise<void> {
+export async function enrollUser(ctx: Context, db: D1Database, groupId: string, user: any): Promise<void> {
 	const userId = user.id.toString();
 	const username = user.username || null;
 	const firstName = user.first_name || null;
 
 	// Ensure user exists
-	await ctx.env.DB.prepare(
+	await db.prepare(
 		'INSERT OR IGNORE INTO users (telegram_id, username, first_name) VALUES (?, ?, ?)'
 	).bind(userId, username, firstName).run();
 
 	// Update user info if changed
-	await ctx.env.DB.prepare(
+	await db.prepare(
 		'UPDATE users SET username = ?, first_name = ? WHERE telegram_id = ?'
 	).bind(username, firstName, userId).run();
 
 	// Ensure user is member of group
-	await ctx.env.DB.prepare(
+	await db.prepare(
 		'INSERT OR IGNORE INTO group_members (group_id, user_id) VALUES (?, ?)'
 	).bind(groupId, userId).run();
 
 	// Ensure they're active
-	await ctx.env.DB.prepare(
+	await db.prepare(
 		'UPDATE group_members SET active = TRUE WHERE group_id = ? AND user_id = ?'
 	).bind(groupId, userId).run();
 }
 
-export async function getGroupEnrollmentStatus(ctx: MyContext, groupId: string): Promise<{
+export async function getGroupEnrollmentStatus(ctx: Context, db: D1Database, groupId: string): Promise<{
 	enrolledUsers: Array<{ telegram_id: string; username: string | null; first_name: string | null }>;
 	totalMembers: number;
 }> {
 	// Get all enrolled users in the group
-	const enrolledUsers = await ctx.env.DB.prepare(`
+	const enrolledUsers = await db.prepare(`
 		SELECT u.telegram_id, u.username, u.first_name
 		FROM users u
 		JOIN group_members gm ON u.telegram_id = gm.user_id
 		WHERE gm.group_id = ? AND gm.active = TRUE
 		ORDER BY u.first_name, u.username
-	`).bind(groupId).all();
+	`).bind(groupId).all<{ telegram_id: string; username: string | null; first_name: string | null }>();
 
 	// Try to get the member count from Telegram
 	let totalMembers = 0;
@@ -87,7 +85,7 @@ export async function getGroupEnrollmentStatus(ctx: MyContext, groupId: string):
 	}
 
 	return {
-		enrolledUsers: enrolledUsers.results || [],
+		enrolledUsers: enrolledUsers.results as Array<{ telegram_id: string; username: string | null; first_name: string | null }>,
 		totalMembers
 	};
 }

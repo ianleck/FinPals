@@ -1,11 +1,11 @@
 import { CommandContext, Context } from 'grammy';
-import { Env } from '../index';
 import { getGroupEnrollmentStatus, enrollAllGroupMembers } from '../utils/group-enrollment';
+import type { D1Database } from '@cloudflare/workers-types';
 
-type MyContext = Context & { env: Env };
+type MyContext = Context & { env?: any };
 type MyCommandContext = CommandContext<MyContext>;
 
-export async function handleStatus(ctx: MyCommandContext): Promise<void> {
+export async function handleStatus(ctx: MyCommandContext, db: D1Database): Promise<void> {
 	try {
 		// Only work in groups
 		if (ctx.chat?.type !== 'group' && ctx.chat?.type !== 'supergroup') {
@@ -16,7 +16,7 @@ export async function handleStatus(ctx: MyCommandContext): Promise<void> {
 		const groupId = ctx.chat.id.toString();
 		
 		// Get enrollment status
-		const status = await getGroupEnrollmentStatus(ctx, groupId);
+		const status = await getGroupEnrollmentStatus(ctx, db, groupId);
 		
 		// Build status message
 		let message = '📊 <b>FinPals Group Status</b>\n\n';
@@ -61,7 +61,7 @@ export async function handleStatus(ctx: MyCommandContext): Promise<void> {
 	}
 }
 
-export async function handleEnrollAll(ctx: MyCommandContext): Promise<void> {
+export async function handleEnrollAll(ctx: MyCommandContext, db: D1Database): Promise<void> {
 	try {
 		// Only work in groups
 		if (ctx.chat?.type !== 'group' && ctx.chat?.type !== 'supergroup') {
@@ -81,7 +81,7 @@ export async function handleEnrollAll(ctx: MyCommandContext): Promise<void> {
 		await ctx.reply('🔄 Enrolling all group admins...');
 		
 		// Enroll all admins
-		const result = await enrollAllGroupMembers(ctx, groupId);
+		const result = await enrollAllGroupMembers(ctx, db, groupId);
 		
 		let message = '✅ <b>Enrollment Complete!</b>\n\n';
 		message += `• Successfully enrolled: ${result.enrolled} admins\n`;
