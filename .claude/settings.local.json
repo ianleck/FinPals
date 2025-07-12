@@ -18,7 +18,10 @@
       "Bash(npx wrangler d1 list:*)",
       "Bash(npm test:*)",
       "Bash(npm install:*)",
-      "WebFetch(domain:developers.cloudflare.com)"
+      "WebFetch(domain:developers.cloudflare.com)",
+      "Bash(npm run:*)",
+      "Bash(node:*)",
+      "Bash(echo:*)"
     ],
     "deny": []
   },

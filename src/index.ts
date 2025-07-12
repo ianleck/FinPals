@@ -19,11 +19,12 @@ import { handleTrips } from './commands/trips';
 import { handleTest } from './commands/test';
 import { handleBudget } from './commands/budget';
 import { handleTemplates, handleQuickAdd } from './commands/templates';
+import { handleStatus, handleEnrollAll } from './commands/status';
 import { trackGroupMetadata } from './utils/group-tracker';
 import type { SessionData } from './utils/session';
 import { COMMANDS, EXPENSE_CATEGORIES } from './utils/constants';
 import { processRecurringReminders } from './utils/recurring-reminders';
-import { handleReceiptUpload } from './utils/receipt-ocr';
+// import { handleReceiptUpload } from './utils/receipt-ocr'; // OCR disabled
 import { handleVoiceMessage } from './utils/voice-handler';
 import { updateExchangeRatesInDB } from './utils/currency';
 
@@ -88,6 +89,7 @@ const worker = {
 					{ command: COMMANDS.SUMMARY, description: 'View monthly summary' },
 					{ command: COMMANDS.BUDGET, description: 'Manage personal budgets (DM only)' },
 					{ command: COMMANDS.TEMPLATES, description: 'Manage expense templates' },
+					{ command: COMMANDS.STATUS, description: 'Show group enrollment status' },
 					{ command: COMMANDS.HELP, description: 'Show all available commands' },
 				];
 
@@ -178,6 +180,8 @@ const worker = {
 			bot.command(COMMANDS.TRIPS, (ctx) => handleTrips(ctx, env.DB));
 			bot.command(COMMANDS.BUDGET, (ctx) => handleBudget(ctx, env.DB));
 			bot.command(COMMANDS.TEMPLATES, (ctx) => handleTemplates(ctx, env.DB));
+			bot.command(COMMANDS.STATUS, (ctx) => handleStatus(ctx));
+			bot.command(COMMANDS.ENROLL_ALL, (ctx) => handleEnrollAll(ctx));
 			bot.command(COMMANDS.HELP, (ctx) => handleHelp(ctx, env.DB));
 			bot.command('test', (ctx) => handleTest(ctx));
 
@@ -198,16 +202,16 @@ const worker = {
 				}
 			});
 
-			// Handle photo messages (receipt OCR)
-			bot.on('message:photo', async (ctx) => {
-				// Only process in groups or when it's a reply to the bot
-				const isGroup = ctx.chat?.type !== 'private';
-				const isReplyToBot = ctx.message?.reply_to_message?.from?.id === ctx.me.id;
-				
-				if (isGroup || isReplyToBot) {
-					await handleReceiptUpload(ctx, env.DB, env);
-				}
-			});
+			// Handle photo messages (receipt OCR) - DISABLED
+			// bot.on('message:photo', async (ctx) => {
+			// 	// Only process in groups or when it's a reply to the bot
+			// 	const isGroup = ctx.chat?.type !== 'private';
+			// 	const isReplyToBot = ctx.message?.reply_to_message?.from?.id === ctx.me.id;
+			// 	
+			// 	if (isGroup || isReplyToBot) {
+			// 		await handleReceiptUpload(ctx, env.DB, env);
+			// 	}
+			// });
 
 			// Handle voice messages
 			bot.on('message:voice', async (ctx) => {

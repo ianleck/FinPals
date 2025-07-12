@@ -112,6 +112,9 @@ ${templateShortcuts}
 /${COMMANDS.SUMMARY} <code>[month]</code> - Monthly summary
 /${COMMANDS.EXPORT} - Export to CSV
 
+<b>👥 Group Management:</b>
+/${COMMANDS.STATUS} - Check who's enrolled in FinPals
+
 <b>🤖 Private Chat Features:</b>
 • DM me to track personal expenses
 • Set budgets and spending limits
@@ -120,7 +123,8 @@ ${templateShortcuts}
 <b>💡 Tips:</b>
 • Custom splits: @user=amount
 • Auto-categorization learns from you
-• Members need to message once to be tracked
+• Members auto-enroll by sending a message
+• Use /status to see who's enrolled
 • I'll DM people when they're added to expenses
 		`;
 	}

@@ -24,40 +24,22 @@ export const EXPENSE_CATEGORIES = [
 export const WelcomeMessage = `
 👋 <b>Welcome to FinPals!</b>
 
-I'll help your group track shared expenses effortlessly. Here's what I can do:
+I'll help track your group's shared expenses.
 
-<b>📍 Core Features:</b>
-• /add - Add expenses with smart splitting
-• /balance - See who owes whom
-• /settle - Record payments
-• /expenses - Browse & manage all expenses
+<b>Quick Start:</b>
+• <code>/add 50 lunch</code> - Split $50 with everyone
+• <code>/add 30 coffee @john</code> - Split $30 with John
+• <code>/balance</code> - See who owes whom
+• <code>/settle @sarah 20</code> - Record a payment
 
-<b>🏝 Trip Management:</b>
-• /trip start &lt;name&gt; - Start a new trip
-• /trip end - End the current trip
-• /trip current - View active trip
-• /trips - List all trips
+<b>More Commands:</b>
+• <code>/status</code> - See who's enrolled
+• <code>/expenses</code> - Browse all expenses
+• <code>/help</code> - View all features
 
-<b>📊 Analytics & Export:</b>
-• /history - Recent transactions
-• /stats - Group statistics
-• /summary - Monthly reports
-• /export - Download as CSV
+💡 <b>Note:</b> Members are enrolled when they send any message.
 
-<b>🎯 Smart Features:</b>
-• Auto-categorization with AI
-• Smart participant suggestions
-• Interactive buttons (no ID copying!)
-• /personal - Your summary across all groups (DM me!)
-
-<b>💡 Pro Tips:</b>
-• I'll notify people when they're added to expenses
-• Use custom splits: /add 100 dinner @john=30 @sarah=70
-• Categories are learned from your patterns
-
-⚠️ <b>Important:</b> Group members need to send at least one message after I join before I can track them!
-
-Ready? Try: /add 20 coffee
+Ready? Try: <code>/add 20 coffee</code>
 `;
 
 export const COMMANDS = {
@@ -79,6 +61,8 @@ export const COMMANDS = {
 	TRIPS: 'trips',
 	BUDGET: 'budget',
 	TEMPLATES: 'templates',
+	STATUS: 'status',
+	ENROLL_ALL: 'enroll_all',
 };
 
 export const ERROR_MESSAGES = {
