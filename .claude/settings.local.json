@@ -1,29 +1,29 @@
 {
-  "permissions": {
-    "allow": [
-      "Bash(rm:*)",
-      "Bash(npm run typecheck:*)",
-      "Bash(npx tsc:*)",
-      "Bash(grep:*)",
-      "Bash(sed:*)",
-      "Bash(npm outdated)",
-      "Bash(npm run lint)",
-      "Bash(mkdir:*)",
-      "Bash(npx wrangler d1 execute:*)",
-      "Bash(cp:*)",
-      "mcp__ide__getDiagnostics",
-      "Bash(cat:*)",
-      "Bash(ls:*)",
-      "Bash(find:*)",
-      "Bash(npx wrangler d1 list:*)",
-      "Bash(npm test:*)",
-      "Bash(npm install:*)",
-      "WebFetch(domain:developers.cloudflare.com)",
-      "Bash(npm run:*)",
-      "Bash(node:*)",
-      "Bash(echo:*)"
-    ],
-    "deny": []
-  },
-  "enableAllProjectMcpServers": false
+	"permissions": {
+		"allow": [
+			"Bash(rg:*)",
+			"Bash(find:*)",
+			"Bash(npm uninstall:*)",
+			"Bash(rm:*)",
+			"Bash(npm run build:*)",
+			"Bash(npx tsc:*)",
+			"Bash(mkdir:*)",
+			"Bash(npm run lint:*)",
+			"Bash(git add:*)",
+			"Bash(git commit:*)",
+			"Bash(npm run dev:*)",
+			"Bash(lsof:*)",
+			"Bash(ls:*)",
+			"Bash(grep:*)",
+			"Bash(npm run typecheck:*)",
+			"Bash(mv:*)",
+			"Bash(true)",
+			"Bash(git checkout:*)",
+			"Bash(npm run:*)",
+			"mcp__sequential-thinking__sequentialthinking"
+		],
+		"deny": []
+	},
+	"enabledMcpjsonServers": ["sequential-thinking", "context7-mcp"],
+	"disabledMcpjsonServers": ["zen"]
 }

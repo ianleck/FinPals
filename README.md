@@ -1,180 +1,95 @@
 # FinPals - Telegram Expense Tracking Bot
 
-FinPals is a powerful Telegram bot for managing shared expenses and settlements within groups. Built on Cloudflare Workers for serverless deployment, it offers smart expense tracking, automatic categorization, and seamless group financial management.
+FinPals is a powerful Telegram bot for managing shared expenses within groups. Built on Cloudflare Workers, it offers smart expense tracking, automatic categorization, and seamless financial management.
 
-## 🌟 Features
+## 🌟 Key Features
 
-### Core Features
-- **Smart Expense Tracking** - Add expenses with automatic categorization using AI
-- **Flexible Splitting** - Equal splits or custom amounts per person
-- **Real-time Balances** - See who owes whom at any time
-- **Easy Settlements** - Record payments and track settlement history
+- **Smart Expense Splitting** - Add expenses with flexible splits (equal or custom amounts)
+- **Real-time Balances** - Track who owes whom instantly
+- **AI-Powered** - Voice messages, receipt OCR, and smart categorization
+- **Personal Budgets** - Set spending limits with alerts
 - **Trip Management** - Organize expenses by trips or events
-- **Personal Budgets** - Set and track budgets in private chat
-- **Data Export** - Export expenses as CSV for external analysis
-
-### Smart Features
-- 🧠 **AI Categorization** - Automatically categorizes expenses based on description
-- ⏰ **Time-based Insights** - Context-aware suggestions based on time of day
-- 🎯 **Smart Suggestions** - Learns from your spending patterns
-- 📊 **Visual Analytics** - Charts and insights about spending habits
-- 🔔 **DM Notifications** - Get notified when added to expenses
+- **Expense Templates** - Quick shortcuts for frequent expenses
+- **Data Export** - Export as CSV for external analysis
 
 ## 🚀 Quick Start
 
+### 1. Add to Telegram
+Search for [@FinPalsBot](https://t.me/FinPalsBot) and add to your group.
+
+### 2. Start Using
+```
+/start - Initialize bot in your group
+/add 50 lunch - Add a $50 lunch expense
+/balance - See who owes whom
+/help - View all commands
+```
+
+## 💻 Self-Hosting
+
 ### Prerequisites
-1. **Telegram Bot Token** - Create via [@BotFather](https://t.me/botfather)
-2. **Cloudflare Account** - Sign up at [cloudflare.com](https://cloudflare.com)
-3. **Node.js 18+** - For local development
+- Telegram Bot Token from [@BotFather](https://t.me/botfather)
+- Cloudflare Account (free tier works)
+- Node.js 18+
 
-### Installation
-
-1. **Clone the repository**
-   ```bash
-   git clone <repository-url>
-   cd FinPals
-   npm install
-   ```
-
-2. **Configure environment**
-   ```bash
-   # Copy the example configuration
-   cp wrangler.toml.example wrangler.toml
-   
-   # Update wrangler.toml with your:
-   # - Cloudflare account ID
-   # - Telegram bot token
-   # - Database IDs
-   ```
-
-3. **Setup database**
-   ```bash
-   # Create D1 database
-   npx wrangler d1 create finpals-db
-   
-   # Run schema
-   npx wrangler d1 execute finpals-db --local --file=./schema.sql
-   ```
-
-4. **Start development**
-   ```bash
-   npm run dev
-   ```
-
-## 📱 Bot Commands
-
-### Group Commands
-| Command | Description | Example |
-|---------|-------------|---------|
-| `/add` | Add expense | `/add 50 lunch @john @sarah` |
-| `/balance` | View balances | `/balance` |
-| `/settle` | Record payment | `/settle @john 25` |
-| `/expenses` | Browse expenses | `/expenses` |
-| `/trip` | Manage trips | `/trip start Bali 2024` |
-| `/stats` | View statistics | `/stats` |
-| `/export` | Export data | `/export` |
-
-### Private Commands
-| Command | Description | Example |
-|---------|-------------|---------|
-| `/budget` | Manage budgets | `/budget set "Food" 500 monthly` |
-| `/personal` | Personal summary | `/personal` |
-| `/add` | Personal expense | `/add 25 coffee` |
-
-## ⚙️ Configuration
-
-### Bot Permissions
-For proper functionality, the bot needs admin permissions in groups:
-- ✅ **Delete messages** - For cleaning up commands
-- ✅ **Send messages** - Basic functionality
-- ✅ **Read messages** - Process commands
-
-### Webhook Setup
-After deployment:
+### Setup
 ```bash
-curl -F "url=https://your-worker.workers.dev/" \
-     https://api.telegram.org/bot<YOUR_BOT_TOKEN>/setWebhook
-```
+# Clone and install
+git clone https://github.com/yourusername/finpals
+cd finpals
+npm install
 
-### Command Registration
-Visit to enable auto-completion:
-```
-https://your-worker.workers.dev/api/set-commands
-```
+# Configure
+cp wrangler.toml.example wrangler.toml
+# Edit wrangler.toml with your account ID
 
-## 🧪 Testing
-
-Run the test suite:
-```bash
-npm test           # Run all tests
-npm run test:watch # Watch mode
-npm run coverage   # Coverage report
-```
-
-## 🚀 Deployment
-
-### Production Deployment
-```bash
-# Create production database
-npx wrangler d1 create finpals-db-prod
-
-# Update wrangler.toml with the database ID
-
-# Run migrations
-npx wrangler d1 execute finpals-db-prod --remote --file=./schema.sql
+# Set secrets
+npx wrangler secret put BOT_TOKEN
+npx wrangler secret put TELEGRAM_BOT_API_SECRET_TOKEN
 
 # Deploy
 npm run deploy
 ```
 
-### Environment Variables
-- `BOT_TOKEN` - Telegram bot token
-- `TELEGRAM_BOT_API_SECRET_TOKEN` - Webhook security token
-- `ENV` - Environment (development/production)
+See [DEVELOPMENT.md](DEVELOPMENT.md) for detailed setup instructions.
 
-## 🏗️ Architecture
+## 📱 Commands
 
-- **Runtime**: Cloudflare Workers (Serverless)
-- **Database**: Cloudflare D1 (SQLite)
-- **Session Storage**: Durable Objects
-- **Language**: TypeScript
-- **Bot Framework**: grammY
-- **Testing**: Vitest
+### Essential Commands
+- `/add 50 lunch` - Add expense (split with everyone)
+- `/add 50 lunch @john` - Split with specific people
+- `/add 50 lunch @john=30 @sarah=20` - Custom splits
+- `/balance` - View who owes whom
+- `/settle @john 25` - Record a payment
+- `/expenses` - Browse all expenses
+- `/help` - View all commands
 
-## 📈 Performance
+### Advanced Features
+- `/trip start "Bali 2024"` - Track trip expenses
+- `/templates create Coffee "Morning coffee" 5` - Create shortcuts
+- `/budget set "Food" 500 monthly` - Set spending limits (DM only)
+- `/stats` → "View Trends" - Visualize spending patterns
 
-Recent optimizations include:
-- Batch database queries to eliminate N+1 problems
-- Optimized expense split insertions
-- Efficient user lookup queries
-- Smart caching strategies
+## 🎤 AI Features
 
-## 🤝 Contributing
+- **Voice Messages**: Say "Add twenty dollars for lunch"
+- **Receipt Scanning**: Send a photo of any receipt
+- **Smart Suggestions**: Get participant recommendations
+- **Auto-Categorization**: Expenses categorized automatically
 
-1. Fork the repository
-2. Create your feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
+## 🛠️ Development
 
-## 📝 License
-
-This project is licensed under the MIT License - see the LICENSE file for details.
+For development setup, deployment, and contribution guidelines, see [DEVELOPMENT.md](DEVELOPMENT.md).
 
 ## 🆘 Support
 
-- **Documentation**: Check `/docs` folder
-- **Issues**: GitHub Issues
-- **Logs**: `npx wrangler tail`
-- **Debug**: Use `/test` command in groups
+- **Common Issues**: See [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md)
+- **Bug Reports**: [GitHub Issues](https://github.com/yourusername/finpals/issues)
+- **Feature Requests**: [GitHub Discussions](https://github.com/yourusername/finpals/discussions)
 
-## 🔒 Security
+## 📝 License
 
-- Webhook validation using secret tokens
-- SQL injection prevention via prepared statements
-- HTML escaping for user inputs
-- Rate limiting for API calls
-- No sensitive data in logs
+MIT License - see [LICENSE](LICENSE) file for details.
 
 ---
 
