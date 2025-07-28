@@ -2,15 +2,22 @@
 
 ## 🏗️ Architecture Overview
 
-FinPals is built on modern serverless architecture:
+FinPals is a **group-first** expense tracking bot built on serverless architecture:
 
 - **Runtime**: Cloudflare Workers (V8 isolates)
 - **Database**: D1 (SQLite at the edge)
 - **Session Storage**: Durable Objects
 - **Language**: TypeScript
 - **Bot Framework**: grammY
-- **AI Services**: Cloudflare AI (Whisper, LLaVA)
 - **Testing**: Vitest with Miniflare
+
+### Design Philosophy
+
+FinPals operates primarily in group chats where expenses are discussed and incurred. Private chat features are optional for personal finance management. This approach:
+- Maintains transparency in group expenses
+- Eliminates context switching
+- Leverages Telegram's natural conversation flow
+- Reduces complexity vs traditional expense apps
 
 ## 🚀 Getting Started
 
@@ -259,6 +266,20 @@ node run-migrations.js
 
 ## 🔧 Common Development Tasks
 
+### Understanding the Group-First Approach
+
+FinPals is designed to work primarily in group chats:
+
+1. **All core features work in groups** - No private chat required
+2. **Member enrollment is progressive** - First mention enrolls them
+3. **Smart defaults reduce friction** - Suggests previous participants
+4. **Transparency by default** - All members see all transactions
+
+**Private chat is optional** and used only for:
+- Personal expense tracking
+- Private budgets
+- Cross-group summaries
+
 ### Adding a New Command
 
 1. Create handler in `src/commands/`:
@@ -293,20 +314,20 @@ For schema changes:
 3. Test locally first
 4. Apply to production after verification
 
-### Adding AI Features
+### Handling Participant Selection
 
-The AI binding is configured in `wrangler.toml`:
+When implementing expense commands, use the smart participant selection:
 
-```toml
-[ai]
-binding = "AI"
-```
-
-Use in code:
 ```typescript
-const result = await env.AI.run('@cf/openai/whisper', {
-  audio: audioData,
-});
+// Get recent participants
+const suggestions = await suggestParticipants(db, groupId, description, userId);
+
+// Show selection UI
+const keyboard = [
+  [{ text: 'Last Group', callback_data: 'use_last' }],
+  [{ text: `All Known (${count})`, callback_data: 'use_all' }],
+  [{ text: 'Add People', callback_data: 'add_custom' }]
+];
 ```
 
 ## 🐛 Debugging
@@ -339,6 +360,33 @@ const result = await env.AI.run('@cf/openai/whisper', {
 - 1MB request/response size
 - Keep responses under 25 messages/second
 
+## 🔍 Known Limitations & Solutions
+
+### Member Enrollment
+
+**Issue**: Telegram bots cannot see all group members automatically.
+
+**How FinPals Handles This**:
+1. **Auto-enrollment** when members:
+   - Send any message in the group
+   - Are mentioned in an expense (`@username`)
+   - Join after bot is added
+   
+2. **Smart participant suggestions** learn from usage:
+   - First expense: `/add 50 lunch @john @mary`
+   - Future expenses: `/add 30 coffee` → suggests John & Mary
+   - Reduces need to manually tag after initial setup
+
+3. **Transparent UI** shows "All Known (X)" not "All Members"
+
+**Best Practice**: After adding bot, either ask everyone to say hi OR just mention them in first expense.
+
+### Other Telegram Limitations
+
+- **No message history** - Bot can't see messages before it joined
+- **Rate limits** - 30 messages/second per chat
+- **No member list API** - Must track interactions
+
 ## 🤝 Contributing
 
 1. **Fork** the repository
@@ -368,6 +416,45 @@ const result = await env.AI.run('@cf/openai/whisper', {
 - [grammY Documentation](https://grammy.dev/)
 - [Telegram Bot API](https://core.telegram.org/bots/api)
 
+## 🐛 Troubleshooting
+
+### Common Issues
+
+**Bot Not Responding**
+- Ensure bot has admin permissions in group
+- Check webhook: `curl https://api.telegram.org/bot<TOKEN>/getWebhookInfo`
+- Verify bot token is correct
+- Check logs: `npx wrangler tail`
+
+**"User not in group" Errors**
+- User needs to interact with bot first (send message or be mentioned)
+- Check enrolled members: `/status`
+- Just mention them: `/add 50 lunch @username` (auto-enrolls)
+
+**Database Errors**
+- Check D1 status in Cloudflare dashboard
+- Verify migrations ran: `npx wrangler d1 execute finpals-db --remote --file=./schema.sql`
+- Watch for quota limits (5M reads/day on free tier)
+
+**Performance Issues**
+- Check worker analytics for CPU time
+- Look for N+1 queries
+- Ensure database indexes exist
+- Consider upgrading Cloudflare plan
+
+### Quick Debugging
+
+```bash
+# View real-time logs
+npx wrangler tail
+
+# Test database connection
+npx wrangler d1 execute finpals-db --local --command "SELECT COUNT(*) FROM users"
+
+# Check webhook status
+curl https://api.telegram.org/bot<TOKEN>/getWebhookInfo
+```
+
 ## 🔒 Security Notes
 
 - Never commit tokens or secrets
@@ -378,5 +465,4 @@ const result = await env.AI.run('@cf/openai/whisper', {
 
 ---
 
-For user documentation, see [README.md](README.md)  
-For troubleshooting, see [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md)
+For user documentation, see [README.md](README.md)

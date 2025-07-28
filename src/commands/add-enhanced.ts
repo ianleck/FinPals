@@ -172,6 +172,18 @@ export async function handleAddEnhanced(ctx: Context, db: D1Database) {
             ) as SuggestionResult;
 
             if (suggestionResult.suggestions.length > 0) {
+                // Get count of all enrolled members
+                const enrolledCount = await db
+                    .prepare(`
+                        SELECT COUNT(DISTINCT gm.user_id) as count
+                        FROM group_members gm
+                        WHERE gm.group_id = ? AND gm.active = TRUE
+                    `)
+                    .bind(groupId)
+                    .first();
+                
+                const activeCount = enrolledCount?.count || 0;
+
                 // Batch fetch user details for all participants
                 const placeholders = suggestionResult.suggestions.map(() => '?').join(',');
                 const userDetails = await db
@@ -202,7 +214,7 @@ export async function handleAddEnhanced(ctx: Context, db: D1Database) {
                     // Action buttons
                     [
                         { text: '➕ Add All Suggested', callback_data: 'add_all_suggested' },
-                        { text: '👥 Add Everyone', callback_data: 'add_everyone' }
+                        { text: `👥 All Known (${activeCount})`, callback_data: 'add_all_known' }
                     ],
                     [
                         { text: '✅ Confirm with Selected', callback_data: `confirm_expense:${amount}:${description}` },
@@ -218,7 +230,7 @@ export async function handleAddEnhanced(ctx: Context, db: D1Database) {
                     `👤 Paid by: @${paidByUsername}\n\n` +
                     `<b>${suggestionResult.context.message}:</b>\n` +
                     participantButtons.map(btn => `• ${btn.text}`).join('\n') +
-                    `\n\n<i>Tap names to toggle, or use the buttons below</i>`;
+                    `\n\n<i>Can't see someone? Mention them with @username</i>`;
 
                 await reply(ctx, suggestionMessage, {
                     parse_mode: 'HTML',

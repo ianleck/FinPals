@@ -6,8 +6,9 @@ import { generateInsight } from '../utils/smart-insights';
 import { reply } from '../utils/reply';
 import { formatCurrency } from '../utils/currency';
 import { checkBudgetAfterExpense } from '../utils/budget-alerts';
+import { parseEnhancedSplits, formatSplitInfo } from '../utils/split-parser';
 
-// Enhanced AI categorization with emoji detection and context
+// Enhanced categorization with emoji detection and context
 function suggestCategory(description: string, amount?: number): string | null {
 	const lowerDesc = description.toLowerCase();
 	
@@ -97,30 +98,7 @@ function suggestCategory(description: string, amount?: number): string | null {
 	return bestMatch.category;
 }
 
-// Parse custom split amounts from mentions (e.g., @john=30)
-function parseCustomSplits(args: string[]): { mentions: string[]; customSplits: Map<string, number> } {
-	const mentions: string[] = [];
-	const customSplits = new Map<string, number>();
-
-	for (const arg of args) {
-		if (arg.startsWith('@')) {
-			if (arg.includes('=')) {
-				// Custom split amount
-				const [mention, amountStr] = arg.split('=');
-				const amount = parseFloat(amountStr);
-				if (!isNaN(amount) && amount > 0) {
-					customSplits.set(mention, amount);
-					mentions.push(mention);
-				}
-			} else {
-				// Regular mention
-				mentions.push(arg);
-			}
-		}
-	}
-
-	return { mentions, customSplits };
-}
+// Function removed - using enhanced split parser instead
 
 export async function handleAdd(ctx: Context, db: D1Database) {
 	const isPersonal = ctx.chat?.type === 'private';
@@ -141,7 +119,9 @@ export async function handleAdd(ctx: Context, db: D1Database) {
 			  'Examples:\n' +
 			  '• /add 120 lunch - Split evenly with all\n' +
 			  '• /add 120 lunch @john @sarah - Split evenly\n' +
-			  '• /add 120 lunch @john=50 @sarah=70 - Custom amounts';
+			  '• /add 120 lunch @john=50 @sarah=70 - Fixed amounts\n' +
+			  '• /add 100 dinner @john=60% @sarah=40% - Percentages\n' +
+			  '• /add 90 pizza @john=2 @sarah=1 - By shares';
 		
 		await replyAndCleanup(
 			ctx,
@@ -179,7 +159,17 @@ export async function handleAdd(ctx: Context, db: D1Database) {
 	}
 
 	const description = descriptionParts.join(' ') || 'Expense';
-	const { mentions, customSplits } = parseCustomSplits(mentionArgs);
+	
+	// Use enhanced split parser
+	let parsedSplits;
+	try {
+		parsedSplits = parseEnhancedSplits(mentionArgs, amount);
+	} catch (error: any) {
+		await replyAndCleanup(ctx, `❌ ${error.message}`, {}, MESSAGE_LIFETIMES.ERROR);
+		return;
+	}
+	
+	const { mentions, splits: enhancedSplits, hasCustomSplits } = parsedSplits;
 
 	// Get participants
 	const groupId = ctx.chat?.id.toString() || '';
@@ -268,11 +258,15 @@ export async function handleAdd(ctx: Context, db: D1Database) {
 					participants = members.results.map((m) => ({ userId: m.user_id as string }));
 				}
 			} else {
-				// Handle mentioned users with custom amounts
+				// Handle mentioned users with enhanced splits
 				for (const userId of mentionedUserIds) {
 					const username = userIdToUsername.get(userId);
-					const customAmount = username ? customSplits.get('@' + username) : undefined;
-					participants.push({ userId, amount: customAmount });
+					if (username) {
+						const splitInfo = enhancedSplits.get('@' + username);
+						if (splitInfo) {
+							participants.push({ userId, amount: splitInfo.value });
+						}
+					}
 				}
 
 				// Try to resolve unknown mentions with batch query
@@ -302,8 +296,11 @@ export async function handleAdd(ctx: Context, db: D1Database) {
 						const userId = foundUsers.get(username);
 						
 						if (userId) {
-							const customAmount = customSplits.get(mention);
-							participants.push({ userId, amount: customAmount });
+							const splitInfo = enhancedSplits.get(mention);
+							participants.push({ 
+								userId, 
+								amount: splitInfo ? splitInfo.value : undefined 
+							});
 						} else {
 							warningMessage += `\n⚠️ ${mention} hasn't interacted with the bot yet`;
 						}
@@ -321,40 +318,24 @@ export async function handleAdd(ctx: Context, db: D1Database) {
 			}
 		}
 
-		// Validate custom splits if provided (not for personal expenses)
+		// Validate splits (not for personal expenses)
 		if (!isPersonal) {
-			const hasCustomSplits = participants.some((p) => p.amount !== undefined);
-			if (hasCustomSplits) {
-				const totalCustom = participants.reduce((sum, p) => sum + (p.amount || 0), 0);
-				const remainingAmount = amount - totalCustom;
-
-				// Check if custom amounts exceed total
-				if (totalCustom > amount) {
-					await reply(ctx, `❌ Custom split amounts ($${totalCustom.toFixed(2)}) exceed the total expense ($${amount.toFixed(2)})!`, {
-						parse_mode: 'HTML',
-					});
-					return;
-				}
-
-				// Distribute remaining amount among users without custom amounts
-				const usersWithoutCustom = participants.filter((p) => p.amount === undefined);
-				if (usersWithoutCustom.length > 0 && remainingAmount > 0) {
-					const splitAmount = remainingAmount / usersWithoutCustom.length;
-					usersWithoutCustom.forEach((p) => (p.amount = splitAmount));
-				} else if (remainingAmount > 0.01) {
-					await reply(ctx,
-						`❌ Custom splits don't add up to the total!\n` +
-							`Total: ${formatCurrency(amount, 'USD')}\n` +
-							`Assigned: $${totalCustom.toFixed(2)}\n` +
-							`Remaining: $${remainingAmount.toFixed(2)}`,
-						{ parse_mode: 'HTML' }
-					);
-					return;
-				}
-			} else {
+			// Enhanced parser already validated and calculated amounts
+			// Just ensure all participants have amounts
+			if (!hasCustomSplits) {
 				// Even split for all participants
 				const splitAmount = amount / participants.length;
 				participants.forEach((p) => (p.amount = splitAmount));
+			}
+			
+			// Final validation - ensure amounts sum to total (with small epsilon for rounding)
+			const totalSplit = participants.reduce((sum, p) => sum + (p.amount || 0), 0);
+			if (Math.abs(totalSplit - amount) > 0.01) {
+				await reply(ctx, 
+					`❌ Error calculating splits. Please try again.`,
+					{ parse_mode: 'HTML' }
+				);
+				return;
 			}
 		}
 
@@ -420,6 +401,7 @@ export async function handleAdd(ctx: Context, db: D1Database) {
 
 		// Get participant names for display
 		let participantDisplay = '';
+		let splitTypeInfo = '';
 		if (!isPersonal) {
 			const participantIds = participants.map((p) => p.userId);
 			const participantNames = await db
@@ -434,6 +416,19 @@ export async function handleAdd(ctx: Context, db: D1Database) {
 					return participant?.amount ? `${name} (${formatCurrency(participant.amount, 'USD')})` : name;
 				})
 				.join(', ');
+				
+			// Add split type info if using custom splits
+			if (hasCustomSplits && parsedSplits) {
+				const splitTypes = new Set<string>();
+				for (const [, split] of enhancedSplits) {
+					if (split.type === 'percentage') splitTypes.add('percentage');
+					else if (split.type === 'share') splitTypes.add('shares');
+				}
+				
+				if (splitTypes.size > 0) {
+					splitTypeInfo = ` (by ${Array.from(splitTypes).join(' & ')})`;
+				}
+			}
 		}
 
 		// Helper function to escape HTML
@@ -464,7 +459,7 @@ export async function handleAdd(ctx: Context, db: D1Database) {
 			  `💵 Amount: <b>${formatCurrency(amount, 'USD')}</b>\n` +
 			  `📝 Description: ${escapeHtml(description)}\n` +
 			  `👤 Paid by: @${paidByUsername}\n` +
-			  `👥 Split: ${participantDisplay}\n` +
+			  `👥 Split: ${participantDisplay}${splitTypeInfo}\n` +
 			  (category ? `📂 Category: ${category} (auto-detected)\n` : '') +
 			  (activeTrip ? `🏝 Trip: ${escapeHtml(activeTrip.name as string)}\n` : '') +
 			  (insight ? `\n${insight}\n` : '') +

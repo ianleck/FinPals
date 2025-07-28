@@ -87,6 +87,7 @@ Add expense with even or custom splits
 • <code>/add 120 lunch @john=50 @sarah=70</code> - Custom amounts
 
 /${COMMANDS.EXPENSES} - Browse all expenses with actions
+/${COMMANDS.EDIT} <code>[id] [field] [value]</code> - Edit expense
 /${COMMANDS.DELETE} <code>[id]</code> - Delete an expense
 /${COMMANDS.CATEGORY} <code>[id] [category]</code> - Categorize expense
 
@@ -96,9 +97,16 @@ Add expense with even or custom splits
 • Use shortcuts for instant tracking
 ${templateShortcuts}
 
+<b>📅 Recurring Expenses:</b>
+/${COMMANDS.RECURRING} - Manage recurring expenses
+• Set up monthly rent, weekly groceries, etc.
+• Expenses created automatically
+• Pause/resume anytime
+
 <b>💰 Balance & Settlements:</b>
 /${COMMANDS.BALANCE} - Who owes whom
 /${COMMANDS.SETTLE} <code>@user [amount]</code> - Record payment
+/${COMMANDS.SETTLE} <code>@user partial</code> - Make partial payment
 /${COMMANDS.HISTORY} - Recent transactions
 
 <b>🏝 Trip Management:</b>

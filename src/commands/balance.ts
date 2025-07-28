@@ -1,5 +1,6 @@
 import { Context } from 'grammy';
 import { reply } from '../utils/reply';
+import { getSimplifiedSettlementPlan } from '../utils/debt-simplification';
 
 interface BalanceResult {
 	user1: string;
@@ -204,13 +205,20 @@ export async function handleBalance(ctx: Context, db: D1Database, tripId?: strin
 
 		message += `\n💵 Total unsettled: <b>$${totalUnsettled.toFixed(2)}</b>`;
 
+		// Add simplified settlement button if there are balances
+		const buttons = [];
+		if (balances.results.length > 0) {
+			buttons.push([
+				{ text: '💡 Simplify Debts', callback_data: `simplify_debts:${filterTripId || ''}` },
+				{ text: '💸 Settle Up', callback_data: 'show_settle_balances' }
+			]);
+		}
+		buttons.push([{ text: '📊 View History', callback_data: 'view_history' }]);
+
 		await reply(ctx, message, {
 			parse_mode: 'HTML',
 			reply_markup: {
-				inline_keyboard: [
-					[{ text: '💸 Settle Up', callback_data: 'show_settle_balances' }],
-					[{ text: '📊 View History', callback_data: 'view_history' }],
-				],
+				inline_keyboard: buttons,
 			},
 		});
 	} catch (error) {

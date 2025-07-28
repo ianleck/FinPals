@@ -5,10 +5,10 @@ FinPals is a powerful Telegram bot for managing shared expenses within groups. B
 ## 🌟 Key Features
 
 - **Smart Expense Splitting** - Add expenses with flexible splits (equal or custom amounts)
-- **Real-time Balances** - Track who owes whom instantly
-- **AI-Powered** - Voice messages, receipt OCR, and smart categorization
-- **Personal Budgets** - Set spending limits with alerts
+- **Real-time Balances** - Track who owes whom instantly  
+- **Smart Participant Suggestions** - Remembers common expense groups
 - **Trip Management** - Organize expenses by trips or events
+- **Personal Budgets** - Set spending limits with alerts (optional DM feature)
 - **Expense Templates** - Quick shortcuts for frequent expenses
 - **Data Export** - Export as CSV for external analysis
 
@@ -17,11 +17,22 @@ FinPals is a powerful Telegram bot for managing shared expenses within groups. B
 ### 1. Add to Telegram
 Search for [@FinPalsBot](https://t.me/FinPalsBot) and add to your group.
 
-### 2. Start Using
+### 2. How Member Detection Works
+ℹ️ **Telegram Limitation**: Bots can only see members who've interacted. FinPals tracks members when they:
+- Send any message in the group
+- Are mentioned in an expense (`@username`)
+- Join after the bot is added
+
+**Quick Setup**: After adding the bot, either:
+- Ask everyone to send a quick "Hi", OR
+- Just mention them when adding expenses (`/add 50 lunch @john @mary`)
+
+### 3. Start Using
 ```
 /start - Initialize bot in your group
 /add 50 lunch - Add a $50 lunch expense
 /balance - See who owes whom
+/status - See who's enrolled
 /help - View all commands
 ```
 
@@ -70,12 +81,13 @@ See [DEVELOPMENT.md](DEVELOPMENT.md) for detailed setup instructions.
 - `/budget set "Food" 500 monthly` - Set spending limits (DM only)
 - `/stats` → "View Trends" - Visualize spending patterns
 
-## 🎤 AI Features
+## 💡 How It Works
 
-- **Voice Messages**: Say "Add twenty dollars for lunch"
-- **Receipt Scanning**: Send a photo of any receipt
-- **Smart Suggestions**: Get participant recommendations
-- **Auto-Categorization**: Expenses categorized automatically
+1. **Add the bot to your group** - No private setup needed
+2. **First expense** - Mention participants: `/add 50 lunch @john @mary`  
+3. **Future expenses** - Just type: `/add 30 coffee` (bot suggests John & Mary)
+4. **Check balances** - `/balance` shows who owes whom
+5. **Settle up** - `/settle @john 25` when payment is made
 
 ## 🛠️ Development
 
@@ -83,7 +95,7 @@ For development setup, deployment, and contribution guidelines, see [DEVELOPMENT
 
 ## 🆘 Support
 
-- **Common Issues**: See [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md)
+- **Common Issues**: See troubleshooting in [DEVELOPMENT.md](DEVELOPMENT.md#-troubleshooting)
 - **Bug Reports**: [GitHub Issues](https://github.com/yourusername/finpals/issues)
 - **Feature Requests**: [GitHub Discussions](https://github.com/yourusername/finpals/discussions)
 

@@ -23,8 +23,11 @@ export async function handleSettle(ctx: Context, db: D1Database) {
 			'❌ Invalid format!\n\n' +
 			'Usage:\n' +
 			'• /settle - Show all unsettled balances\n' +
-			'• /settle @username [amount] - Record a payment\n\n' +
-			'Example: /settle @john 25.50',
+			'• /settle @username [amount] - Record a payment\n' +
+			'• /settle @username partial - Pay part of what you owe\n\n' +
+			'Examples:\n' +
+			'• /settle @john 25.50 - Pay John $25.50\n' +
+			'• /settle @john partial - Choose amount to pay John',
 			{ parse_mode: 'HTML' }
 		);
 		return;
@@ -37,15 +40,21 @@ export async function handleSettle(ctx: Context, db: D1Database) {
 		return;
 	}
 
+	const groupId = ctx.chat?.id.toString() || '';
+	const fromUserId = ctx.from!.id.toString();
+	const fromUsername = ctx.from!.username || ctx.from!.first_name || 'Unknown';
+
+	// Check for partial settlement
+	if (args[1].toLowerCase() === 'partial') {
+		await handlePartialSettlement(ctx, db, mention, groupId, fromUserId, fromUsername);
+		return;
+	}
+
 	const amount = parseFloat(args[1]);
 	if (isNaN(amount) || amount <= 0) {
 		await reply(ctx, ERROR_MESSAGES.INVALID_AMOUNT);
 		return;
 	}
-
-	const groupId = ctx.chat?.id.toString() || '';
-	const fromUserId = ctx.from!.id.toString();
-	const fromUsername = ctx.from!.username || ctx.from!.first_name || 'Unknown';
 
 	try {
 		// TODO: In a real implementation, we'd resolve the @mention to get the user ID
@@ -251,12 +260,18 @@ export async function showUnsettledBalances(ctx: Context, db: D1Database) {
 
 			message += `@${owerName} owes @${owedName}: <b>$${amount.toFixed(2)}</b>\n`;
 
-			// Create settle button with format: settle_{owerId}_{owedId}_{amount}
-			const buttonText = `💰 Settle $${amount.toFixed(2)}`;
-			const callbackData = `settle_${owerId}_${owedId}_${amount.toFixed(2)}`;
+			// Create settle buttons with format: settle_{owerId}_{owedId}_{amount}
+			const fullButtonText = `💰 Settle $${amount.toFixed(2)}`;
+			const fullCallbackData = `settle_${owerId}_${owedId}_${amount.toFixed(2)}_full`;
 			
-			// Add button for this balance
-			inlineButtons.push([{ text: buttonText, callback_data: callbackData }]);
+			const partialButtonText = `💵 Partial Payment`;
+			const partialCallbackData = `settle_${owerId}_${owedId}_${amount.toFixed(2)}_partial`;
+			
+			// Add buttons for this balance
+			inlineButtons.push([
+				{ text: fullButtonText, callback_data: fullCallbackData },
+				{ text: partialButtonText, callback_data: partialCallbackData }
+			]);
 		}
 
 		message += '\nClick a button below to settle a specific balance:';
@@ -280,6 +295,7 @@ export async function handleSettleCallback(ctx: Context, db: D1Database) {
 	const owerId = parts[1];
 	const owedId = parts[2];
 	const amount = parseFloat(parts[3]);
+	const settlementType = parts[4]; // 'full' or 'partial'
 	
 	const currentUserId = ctx.from!.id.toString();
 	
@@ -290,6 +306,12 @@ export async function handleSettleCallback(ctx: Context, db: D1Database) {
 	}
 	
 	await ctx.answerCallbackQuery();
+	
+	// Handle partial settlement
+	if (settlementType === 'partial') {
+		await handlePartialSettlementCallback(ctx, db, owerId, owedId, amount);
+		return;
+	}
 	
 	// Create a simulated settle command
 	const groupId = ctx.chat?.id.toString();
@@ -354,4 +376,183 @@ export async function handleSettleCallback(ctx: Context, db: D1Database) {
 	} catch (error) {
 		// User might have blocked the bot
 	}
+}
+
+async function handlePartialSettlement(
+	ctx: Context, 
+	db: D1Database, 
+	mention: string, 
+	groupId: string, 
+	fromUserId: string, 
+	fromUsername: string
+) {
+	try {
+		// Get the mentioned user
+		const groupMembers = await db.prepare(`
+			SELECT u.telegram_id, u.username, u.first_name
+			FROM users u
+			JOIN group_members gm ON u.telegram_id = gm.user_id
+			WHERE gm.group_id = ? AND gm.active = TRUE AND u.username = ?
+		`).bind(groupId, mention.substring(1)).first();
+
+		if (!groupMembers) {
+			await reply(ctx, 
+				`❌ User ${mention} not found in this group.\n\n` +
+				'Make sure they have used the bot at least once.',
+				{ parse_mode: 'HTML' }
+			);
+			return;
+		}
+
+		const toUserId = groupMembers.telegram_id as string;
+		const toUsername = groupMembers.username || groupMembers.first_name || 'User';
+
+		// Get current balance
+		const currentBalance = await db.prepare(`
+			WITH expense_balances AS (
+				SELECT 
+					e.paid_by as creditor,
+					es.user_id as debtor,
+					SUM(es.amount) as amount
+				FROM expenses e
+				JOIN expense_splits es ON e.id = es.expense_id
+				WHERE e.group_id = ? AND e.deleted = FALSE
+					AND ((e.paid_by = ? AND es.user_id = ?) OR (e.paid_by = ? AND es.user_id = ?))
+				GROUP BY e.paid_by, es.user_id
+			),
+			settlement_balances AS (
+				SELECT 
+					to_user as creditor,
+					from_user as debtor,
+					SUM(amount) as amount
+				FROM settlements
+				WHERE group_id = ?
+					AND ((to_user = ? AND from_user = ?) OR (to_user = ? AND from_user = ?))
+				GROUP BY to_user, from_user
+			)
+			SELECT 
+				SUM(CASE 
+					WHEN creditor = ? AND debtor = ? THEN amount
+					WHEN creditor = ? AND debtor = ? THEN -amount
+					ELSE 0
+				END) as net_balance
+			FROM (
+				SELECT creditor, debtor, amount FROM expense_balances
+				UNION ALL
+				SELECT creditor, debtor, -amount FROM settlement_balances
+			)
+		`).bind(
+			groupId, fromUserId, toUserId, toUserId, fromUserId,
+			groupId, fromUserId, toUserId, toUserId, fromUserId,
+			fromUserId, toUserId, toUserId, fromUserId
+		).first();
+
+		const netBalance = currentBalance?.net_balance as number || 0;
+
+		if (Math.abs(netBalance) < 0.01) {
+			await reply(ctx, `✅ You're already settled up with @${toUsername}!`);
+			return;
+		}
+
+		const owedAmount = Math.abs(netBalance);
+		const isFromUserOwing = netBalance < 0;
+
+		if (!isFromUserOwing) {
+			await reply(ctx, `❌ @${toUsername} owes you $${owedAmount.toFixed(2)}. They should initiate the payment.`);
+			return;
+		}
+
+		// Show partial payment options
+		const buttons = [];
+		const commonAmounts = [10, 20, 25, 50, 100];
+		
+		// Add quick amount buttons
+		for (const amt of commonAmounts) {
+			if (amt < owedAmount) {
+				buttons.push([{ 
+					text: `💵 Pay $${amt}`, 
+					callback_data: `partial_pay_${toUserId}_${amt}` 
+				}]);
+			}
+		}
+		
+		// Add percentage buttons
+		buttons.push([
+			{ text: '25%', callback_data: `partial_pay_${toUserId}_${(owedAmount * 0.25).toFixed(2)}` },
+			{ text: '50%', callback_data: `partial_pay_${toUserId}_${(owedAmount * 0.50).toFixed(2)}` },
+			{ text: '75%', callback_data: `partial_pay_${toUserId}_${(owedAmount * 0.75).toFixed(2)}` }
+		]);
+		
+		// Add custom amount option
+		buttons.push([{ text: '✏️ Custom Amount', callback_data: `partial_custom_${toUserId}_${owedAmount.toFixed(2)}` }]);
+		buttons.push([{ text: '❌ Cancel', callback_data: 'close' }]);
+
+		await reply(ctx,
+			`💵 <b>Partial Settlement</b>\n\n` +
+			`You owe @${toUsername}: <b>$${owedAmount.toFixed(2)}</b>\n\n` +
+			`Select an amount to pay:`,
+			{
+				parse_mode: 'HTML',
+				reply_markup: { inline_keyboard: buttons }
+			}
+		);
+	} catch (error) {
+		console.error('Error handling partial settlement:', error);
+		await reply(ctx, ERROR_MESSAGES.DATABASE_ERROR);
+	}
+}
+
+async function handlePartialSettlementCallback(
+	ctx: Context,
+	db: D1Database,
+	owerId: string,
+	owedId: string,
+	totalAmount: number
+) {
+	const buttons = [];
+	const commonAmounts = [10, 20, 25, 50, 100];
+	
+	// Get usernames
+	const users = await db.prepare(`
+		SELECT telegram_id, username, first_name
+		FROM users
+		WHERE telegram_id IN (?, ?)
+	`).bind(owerId, owedId).all();
+	
+	const owerUser = users.results.find(u => u.telegram_id === owerId);
+	const owedUser = users.results.find(u => u.telegram_id === owedId);
+	
+	const owerName = owerUser?.username || owerUser?.first_name || 'User';
+	const owedName = owedUser?.username || owedUser?.first_name || 'User';
+	
+	// Add quick amount buttons
+	for (const amt of commonAmounts) {
+		if (amt < totalAmount) {
+			buttons.push([{ 
+				text: `💵 Pay $${amt}`, 
+				callback_data: `partial_pay_${owerId}_${owedId}_${amt}` 
+			}]);
+		}
+	}
+	
+	// Add percentage buttons
+	buttons.push([
+		{ text: '25%', callback_data: `partial_pay_${owerId}_${owedId}_${(totalAmount * 0.25).toFixed(2)}` },
+		{ text: '50%', callback_data: `partial_pay_${owerId}_${owedId}_${(totalAmount * 0.50).toFixed(2)}` },
+		{ text: '75%', callback_data: `partial_pay_${owerId}_${owedId}_${(totalAmount * 0.75).toFixed(2)}` }
+	]);
+	
+	// Add custom amount option
+	buttons.push([{ text: '✏️ Custom Amount', callback_data: `partial_custom_${owerId}_${owedId}_${totalAmount.toFixed(2)}` }]);
+	buttons.push([{ text: '◀️ Back', callback_data: 'show_settle_balances' }]);
+
+	await ctx.editMessageText(
+		`💵 <b>Partial Settlement</b>\n\n` +
+		`@${owerName} owes @${owedName}: <b>$${totalAmount.toFixed(2)}</b>\n\n` +
+		`Select an amount to pay:`,
+		{
+			parse_mode: 'HTML',
+			reply_markup: { inline_keyboard: buttons }
+		}
+	);
 }

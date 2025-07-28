@@ -26,18 +26,18 @@ export const WelcomeMessage = `
 
 I'll help track your group's shared expenses.
 
-<b>Quick Start:</b>
-• <code>/add 50 lunch</code> - Split $50 with everyone
-• <code>/add 30 coffee @john</code> - Split $30 with John
+⚠️ <b>Important Setup:</b>
+Due to Telegram limitations, I can't see all group members yet. To get started:
+
+1️⃣ Make me admin (optional but recommended)
+2️⃣ Ask everyone to send a quick message
+3️⃣ Use <code>/status</code> to check who's enrolled
+
+<b>Quick Commands:</b>
+• <code>/add 50 lunch</code> - Split with everyone enrolled
+• <code>/add 30 coffee @john</code> - Split with specific people
 • <code>/balance</code> - See who owes whom
 • <code>/settle @sarah 20</code> - Record a payment
-
-<b>More Commands:</b>
-• <code>/status</code> - See who's enrolled
-• <code>/expenses</code> - Browse all expenses
-• <code>/help</code> - View all features
-
-💡 <b>Note:</b> Members are enrolled when they send any message.
 
 Ready? Try: <code>/add 20 coffee</code>
 `;
@@ -51,6 +51,7 @@ export const COMMANDS = {
 	STATS: 'stats',
 	HELP: 'help',
 	EXPENSES: 'expenses',
+	EDIT: 'edit',
 	CATEGORY: 'category',
 	DELETE: 'delete',
 	CURRENCY: 'currency',
@@ -61,6 +62,7 @@ export const COMMANDS = {
 	TRIPS: 'trips',
 	BUDGET: 'budget',
 	TEMPLATES: 'templates',
+	RECURRING: 'recurring',
 	STATUS: 'status',
 	ENROLL_ALL: 'enroll_all',
 };

@@ -183,6 +183,7 @@ export async function handleExpenseSelection(ctx: Context, db: D1Database) {
 
 		const actionButtons = [
 			[{ text: '📂 Change Category', callback_data: `cat:${expense.id}:${page}` }],
+			[{ text: '✏️ Edit Expense', callback_data: `edit:${expense.id}` }],
 			[{ text: '📊 View Full Details', callback_data: `exp:${expense.id}` }]
 		];
 

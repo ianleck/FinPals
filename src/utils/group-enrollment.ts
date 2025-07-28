@@ -76,8 +76,8 @@ export async function getGroupEnrollmentStatus(ctx: Context, db: D1Database, gro
 	let totalMembers = 0;
 	try {
 		const chat = await ctx.api.getChat(groupId);
-		if ('member_count' in chat) {
-			totalMembers = chat.member_count || 0;
+		if ('member_count' in chat && typeof chat.member_count === 'number') {
+			totalMembers = chat.member_count;
 		}
 	} catch (error) {
 		console.error('Failed to get member count:', error);

@@ -11,6 +11,7 @@ import { handleHistory } from './commands/history';
 import { handleExpenses, showExpensesPage, handleExpenseSelection } from './commands/expenses';
 import { handleDelete } from './commands/delete';
 import { handleCategory } from './commands/category';
+import { handleEdit, handleEditCallback } from './commands/edit';
 import { handleExport } from './commands/export';
 import { handleSummary } from './commands/summary';
 import { handlePersonal } from './commands/personal';
@@ -20,12 +21,11 @@ import { handleTest } from './commands/test';
 import { handleBudget } from './commands/budget';
 import { handleTemplates, handleQuickAdd } from './commands/templates';
 import { handleStatus, handleEnrollAll } from './commands/status';
+import { handleRecurring, handleRecurringCallbacks } from './commands/recurring';
 import { trackGroupMetadata } from './utils/group-tracker';
 import type { SessionData } from './utils/session';
 import { COMMANDS, EXPENSE_CATEGORIES } from './utils/constants';
 import { processRecurringReminders } from './utils/recurring-reminders';
-// import { handleReceiptUpload } from './utils/receipt-ocr'; // OCR disabled
-import { handleVoiceMessage } from './utils/voice-handler';
 import { updateExchangeRatesInDB } from './utils/currency';
 
 type MyContext = Context & SessionFlavor<SessionData> & { env: Env };
@@ -38,8 +38,6 @@ export interface Env {
 	DB: D1Database;
 	// Durable Object namespace for grammY sessions
 	SESSIONS: DurableObjectNamespace;
-	// AI binding for OCR
-	AI: any;
 }
 
 const corsHeaders = {
@@ -83,12 +81,14 @@ const worker = {
 					{ command: COMMANDS.HISTORY, description: 'View recent transactions' },
 					{ command: COMMANDS.STATS, description: 'View group statistics' },
 					{ command: COMMANDS.EXPENSES, description: 'List all expenses' },
+					{ command: COMMANDS.EDIT, description: 'Edit an expense' },
 					{ command: COMMANDS.DELETE, description: 'Delete an expense' },
 					{ command: COMMANDS.CATEGORY, description: 'Update expense category' },
 					{ command: COMMANDS.EXPORT, description: 'Export data as CSV' },
 					{ command: COMMANDS.SUMMARY, description: 'View monthly summary' },
 					{ command: COMMANDS.BUDGET, description: 'Manage personal budgets (DM only)' },
 					{ command: COMMANDS.TEMPLATES, description: 'Manage expense templates' },
+					{ command: COMMANDS.RECURRING, description: 'Manage recurring expenses' },
 					{ command: COMMANDS.STATUS, description: 'Show group enrollment status' },
 					{ command: COMMANDS.HELP, description: 'Show all available commands' },
 				];
@@ -171,6 +171,7 @@ const worker = {
 			bot.command(COMMANDS.HISTORY, (ctx) => handleHistory(ctx, env.DB));
 			bot.command(COMMANDS.STATS, (ctx) => handleStats(ctx, env.DB));
 			bot.command(COMMANDS.EXPENSES, (ctx) => handleExpenses(ctx, env.DB));
+			bot.command(COMMANDS.EDIT, (ctx) => handleEdit(ctx, env.DB));
 			bot.command(COMMANDS.DELETE, (ctx) => handleDelete(ctx, env.DB));
 			bot.command(COMMANDS.CATEGORY, (ctx) => handleCategory(ctx, env.DB));
 			bot.command(COMMANDS.EXPORT, (ctx) => handleExport(ctx, env.DB));
@@ -180,6 +181,7 @@ const worker = {
 			bot.command(COMMANDS.TRIPS, (ctx) => handleTrips(ctx, env.DB));
 			bot.command(COMMANDS.BUDGET, (ctx) => handleBudget(ctx, env.DB));
 			bot.command(COMMANDS.TEMPLATES, (ctx) => handleTemplates(ctx, env.DB));
+			bot.command(COMMANDS.RECURRING, (ctx) => handleRecurring(ctx, env.DB));
 			bot.command(COMMANDS.STATUS, (ctx) => handleStatus(ctx, env.DB));
 			bot.command(COMMANDS.ENROLL_ALL, (ctx) => handleEnrollAll(ctx, env.DB));
 			bot.command(COMMANDS.HELP, (ctx) => handleHelp(ctx, env.DB));
@@ -202,39 +204,6 @@ const worker = {
 				}
 			});
 
-			// Handle photo messages (receipt OCR) - DISABLED
-			// bot.on('message:photo', async (ctx) => {
-			// 	// Only process in groups or when it's a reply to the bot
-			// 	const isGroup = ctx.chat?.type !== 'private';
-			// 	const isReplyToBot = ctx.message?.reply_to_message?.from?.id === ctx.me.id;
-			// 	
-			// 	if (isGroup || isReplyToBot) {
-			// 		await handleReceiptUpload(ctx, env.DB, env);
-			// 	}
-			// });
-
-			// Handle voice messages
-			bot.on('message:voice', async (ctx) => {
-				// Only process in groups or when it's a reply to the bot
-				const isGroup = ctx.chat?.type !== 'private';
-				const isReplyToBot = ctx.message?.reply_to_message?.from?.id === ctx.me.id;
-				
-				if (isGroup || isReplyToBot) {
-					try {
-						await handleVoiceMessage(ctx, env.DB, env);
-					} catch (error) {
-						console.error('Voice message error:', error);
-						await ctx.reply(
-							'🎤 Voice message received!\n\n' +
-							'⚠️ Voice transcription is currently unavailable.\n\n' +
-							'Please type your expense instead:\n' +
-							'`/add [amount] [description]`\n\n' +
-							'Example: `/add 20 lunch`',
-							{ parse_mode: 'Markdown' }
-						);
-					}
-				}
-			});
 
 			// Handle callback queries
 			bot.callbackQuery('help', (ctx) => handleHelp(ctx, env.DB));
@@ -287,6 +256,34 @@ const worker = {
 			bot.callbackQuery('view_balance', async (ctx) => {
 				await ctx.answerCallbackQuery();
 				await handleBalance(ctx, env.DB);
+			});
+
+			// Handle debt simplification
+			bot.callbackQuery(/^simplify_debts:(.*)$/, async (ctx) => {
+				await ctx.answerCallbackQuery();
+				const tripId = ctx.match[1] || undefined;
+				const groupId = ctx.chat?.id.toString();
+				
+				if (!groupId) return;
+				
+				try {
+					const { getSimplifiedSettlementPlan } = await import('./utils/debt-simplification');
+					const { transactions, message } = await getSimplifiedSettlementPlan(env.DB, groupId, tripId);
+					
+					const buttons = [];
+					if (transactions.length > 0) {
+						buttons.push([{ text: '💸 Start Settling', callback_data: 'show_settle_balances' }]);
+					}
+					buttons.push([{ text: '◀️ Back to Balance', callback_data: 'view_balance' }]);
+					
+					await ctx.reply(message, { 
+						parse_mode: 'HTML',
+						reply_markup: { inline_keyboard: buttons }
+					});
+				} catch (error) {
+					console.error('Error simplifying debts:', error);
+					await ctx.reply('❌ Error calculating simplified settlements.');
+				}
 			});
 
 			bot.callbackQuery('view_history', async (ctx) => {
@@ -774,7 +771,7 @@ const worker = {
 						'UPDATE expenses SET category = ? WHERE id = ?'
 					).bind(category, expenseId).run();
 
-					// Update category mapping for AI
+					// Update category mapping for learning
 					await env.DB.prepare(`
 						INSERT INTO category_mappings (description_pattern, category, confidence)
 						VALUES (?, ?, 1.0)
@@ -841,29 +838,6 @@ const worker = {
 				await ctx.deleteMessage();
 			});
 
-			// Handle voice confirmation callbacks
-			bot.callbackQuery(/^voice_confirm:/, async (ctx) => {
-				const [_, amount, ...descParts] = ctx.callbackQuery.data.split(':');
-				const description = descParts.join(':'); // In case description contains colons
-				await ctx.answerCallbackQuery();
-				
-				// Create a simulated add command
-				const messageText = `/add ${amount} ${description}`;
-				const newMessage = Object.assign({}, ctx.message || {}, {
-					text: messageText
-				});
-				const newCtx = Object.assign({}, ctx, {
-					message: newMessage
-				});
-				
-				await ctx.editMessageText('✅ Adding expense from voice message...');
-				await handleAdd(newCtx, env.DB);
-			});
-
-			bot.callbackQuery('voice_cancel', async (ctx) => {
-				await ctx.answerCallbackQuery('Voice expense cancelled');
-				await ctx.deleteMessage();
-			});
 
 			// Handle dismiss budget alert callback
 			bot.callbackQuery('dismiss_budget_alert', async (ctx) => {
@@ -874,6 +848,158 @@ const worker = {
 			// Handle settle button callback
 			bot.callbackQuery(/^settle_/, async (ctx) => {
 				await handleSettleCallback(ctx, env.DB);
+			});
+
+			// Handle partial payment callbacks
+			bot.callbackQuery(/^partial_pay_/, async (ctx) => {
+				const parts = ctx.callbackQuery.data.split('_');
+				let owerId: string, owedId: string, amount: number;
+				
+				if (parts.length === 4) {
+					// From partial settlement command: partial_pay_{toUserId}_{amount}
+					owedId = parts[2];
+					owerId = ctx.from!.id.toString();
+					amount = parseFloat(parts[3]);
+				} else {
+					// From balance view: partial_pay_{owerId}_{owedId}_{amount}
+					owerId = parts[2];
+					owedId = parts[3];
+					amount = parseFloat(parts[4]);
+				}
+				
+				const groupId = ctx.chat?.id.toString();
+				if (!groupId) return;
+				
+				await ctx.answerCallbackQuery();
+				
+				// Record the partial settlement
+				const settlementId = crypto.randomUUID();
+				await env.DB.prepare(
+					'INSERT INTO settlements (id, group_id, from_user, to_user, amount, created_by) VALUES (?, ?, ?, ?, ?, ?)'
+				).bind(settlementId, groupId, owerId, owedId, amount, ctx.from!.id.toString()).run();
+				
+				// Get usernames
+				const users = await env.DB.prepare(`
+					SELECT telegram_id, username, first_name
+					FROM users
+					WHERE telegram_id IN (?, ?)
+				`).bind(owerId, owedId).all();
+				
+				const owerUser = users.results.find(u => u.telegram_id === owerId);
+				const owedUser = users.results.find(u => u.telegram_id === owedId);
+				
+				const owerName = owerUser?.username || owerUser?.first_name || 'User';
+				const owedName = owedUser?.username || owedUser?.first_name || 'User';
+				
+				// Get remaining balance
+				const remainingBalance = await env.DB.prepare(`
+					WITH expense_balances AS (
+						SELECT 
+							e.paid_by as creditor,
+							es.user_id as debtor,
+							SUM(es.amount) as amount
+						FROM expenses e
+						JOIN expense_splits es ON e.id = es.expense_id
+						WHERE e.group_id = ? AND e.deleted = FALSE
+							AND ((e.paid_by = ? AND es.user_id = ?) OR (e.paid_by = ? AND es.user_id = ?))
+						GROUP BY e.paid_by, es.user_id
+					),
+					settlement_balances AS (
+						SELECT 
+							to_user as creditor,
+							from_user as debtor,
+							SUM(amount) as amount
+						FROM settlements
+						WHERE group_id = ?
+							AND ((to_user = ? AND from_user = ?) OR (to_user = ? AND from_user = ?))
+						GROUP BY to_user, from_user
+					)
+					SELECT 
+						SUM(CASE 
+							WHEN creditor = ? AND debtor = ? THEN amount
+							WHEN creditor = ? AND debtor = ? THEN -amount
+							ELSE 0
+						END) as net_balance
+					FROM (
+						SELECT creditor, debtor, amount FROM expense_balances
+						UNION ALL
+						SELECT creditor, debtor, -amount FROM settlement_balances
+					)
+				`).bind(
+					groupId, owerId, owedId, owedId, owerId,
+					groupId, owerId, owedId, owedId, owerId,
+					owedId, owerId, owerId, owedId
+				).first();
+				
+				const remaining = Math.abs(remainingBalance?.net_balance as number || 0);
+				
+				let message = `💵 <b>Partial Payment Recorded</b>\n\n`;
+				message += `@${owerName} paid @${owedName}: <b>$${amount.toFixed(2)}</b>\n\n`;
+				
+				if (remaining < 0.01) {
+					message += `✅ All settled up!`;
+				} else {
+					message += `💰 Remaining: <b>$${remaining.toFixed(2)}</b>`;
+				}
+				
+				await ctx.editMessageText(message, { 
+					parse_mode: 'HTML',
+					reply_markup: {
+						inline_keyboard: [[
+							{ text: '📊 View All Balances', callback_data: 'view_balance' }
+						]]
+					}
+				});
+				
+				// Send notification
+				try {
+					await ctx.api.sendMessage(
+						owedId,
+						`💵 <b>Partial Payment Received!</b>\n\n` +
+						`@${owerName} paid you <b>$${amount.toFixed(2)}</b>\n` +
+						`Group: ${ctx.chat?.title || 'your group'}\n` +
+						`Remaining: $${remaining.toFixed(2)}`,
+						{ parse_mode: 'HTML' }
+					);
+				} catch {
+					// User might have blocked the bot
+				}
+			});
+
+			// Handle custom partial payment
+			bot.callbackQuery(/^partial_custom_/, async (ctx) => {
+				await ctx.answerCallbackQuery('Please type the amount you want to pay');
+				const parts = ctx.callbackQuery.data.split('_');
+				
+				let instruction = '';
+				if (parts.length === 4) {
+					// From partial command
+					const toUserId = parts[2];
+					const totalOwed = parts[3];
+					
+					const user = await env.DB.prepare(
+						'SELECT username, first_name FROM users WHERE telegram_id = ?'
+					).bind(toUserId).first();
+					
+					const username = user?.username || user?.first_name || 'User';
+					instruction = `💵 You owe @${username} $${totalOwed}\n\n`;
+				}
+				
+				instruction += 'Please type the amount you want to pay:\n';
+				instruction += 'Example: 15.50';
+				
+				await ctx.editMessageText(instruction, { parse_mode: 'HTML' });
+			});
+
+			// Handle recurring expense callbacks
+			bot.callbackQuery(/^recurring_/, async (ctx) => {
+				await handleRecurringCallbacks(ctx, env.DB);
+			});
+
+			// Handle edit expense callback
+			bot.callbackQuery(/^edit:/, async (ctx) => {
+				const expenseId = ctx.callbackQuery.data.split(':')[1];
+				await handleEditCallback(ctx, env.DB, expenseId);
 			});
 
 			// Handle expense details callback
@@ -976,8 +1102,13 @@ const worker = {
 			
 			// Process recurring expense reminders (runs every cron trigger)
 			const bot = new Bot<MyContext>(env.BOT_TOKEN);
-			const stats = await processRecurringReminders(env.DB, bot);
-			console.log(`Recurring reminders processed: ${stats.sent} sent, ${stats.errors} errors`);
+			const reminderStats = await processRecurringReminders(env.DB, bot);
+			console.log(`Recurring reminders processed: ${reminderStats.sent} sent, ${reminderStats.errors} errors`);
+			
+			// Process recurring expenses
+			const { processRecurringExpenses } = await import('./utils/process-recurring');
+			const recurringStats = await processRecurringExpenses(env.DB, bot);
+			console.log(`Recurring expenses processed: ${recurringStats.created} created, ${recurringStats.errors} errors`);
 		} catch (error) {
 			console.error('Error in scheduled handler:', error);
 		}

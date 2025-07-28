@@ -45,9 +45,6 @@ binding = "DB"
 database_name = "finpals-db"
 database_id = "897f6b1e-e788-43c8-bc9a-0b499727716c"  # Replace with your database ID from dashboard
 
-# AI binding for receipt OCR
-[ai]
-binding = "AI"
 
 # Production environment
 [env.production]
