@@ -213,8 +213,12 @@ export async function handleAdd(ctx: Context, db: D1Database) {
 					.run();
 			}
 
-			// Ensure payer is in group
-			await db.prepare('INSERT OR IGNORE INTO group_members (group_id, user_id) VALUES (?, ?)').bind(groupId, paidBy).run();
+			// Ensure payer is in group and active
+			await db.prepare(`
+				INSERT INTO group_members (group_id, user_id, active) 
+				VALUES (?, ?, TRUE)
+				ON CONFLICT(group_id, user_id) DO UPDATE SET active = TRUE
+			`).bind(groupId, paidBy).run();
 		}
 
 		// Ensure payer is in users table
@@ -256,6 +260,11 @@ export async function handleAdd(ctx: Context, db: D1Database) {
 					const members = await db.prepare('SELECT user_id FROM group_members WHERE group_id = ? AND active = TRUE').bind(groupId).all();
 
 					participants = members.results.map((m) => ({ userId: m.user_id as string }));
+					
+					// If no active members found, just use the payer
+					if (participants.length === 0) {
+						participants = [{ userId: paidBy }];
+					}
 				}
 			} else {
 				// Handle mentioned users with enhanced splits
@@ -302,7 +311,7 @@ export async function handleAdd(ctx: Context, db: D1Database) {
 								amount: splitInfo ? splitInfo.value : undefined 
 							});
 						} else {
-							warningMessage += `\n⚠️ ${mention} hasn't interacted with the bot yet`;
+							warningMessage += `\n⚠️ ${mention} hasn't interacted with the bot yet - their share will be split among others`;
 						}
 					}
 				}
@@ -311,10 +320,6 @@ export async function handleAdd(ctx: Context, db: D1Database) {
 				if (!participants.some((p) => p.userId === paidBy)) {
 					participants.push({ userId: paidBy });
 				}
-			}
-
-			if (participants.length === 0) {
-				participants = [{ userId: paidBy }];
 			}
 		}
 
@@ -328,11 +333,28 @@ export async function handleAdd(ctx: Context, db: D1Database) {
 				participants.forEach((p) => (p.amount = splitAmount));
 			}
 			
+			// If we have custom splits but some users weren't found, we need to recalculate
+			if (hasCustomSplits && warningMessage && participants.length > 0) {
+				// Get total amount assigned to found participants
+				const assignedTotal = participants.reduce((sum, p) => sum + (p.amount || 0), 0);
+				
+				// If less than the expense amount, distribute the difference
+				if (assignedTotal < amount - 0.01) {
+					const unassigned = amount - assignedTotal;
+					const perPerson = unassigned / participants.length;
+					
+					// Add the unassigned amount evenly to all found participants
+					participants.forEach((p) => {
+						p.amount = (p.amount || 0) + perPerson;
+					});
+				}
+			}
+			
 			// Final validation - ensure amounts sum to total (with small epsilon for rounding)
 			const totalSplit = participants.reduce((sum, p) => sum + (p.amount || 0), 0);
 			if (Math.abs(totalSplit - amount) > 0.01) {
 				await reply(ctx, 
-					`❌ Error calculating splits. Please try again.`,
+					`❌ Error calculating splits. Total: ${amount}, Split sum: ${totalSplit}`,
 					{ parse_mode: 'HTML' }
 				);
 				return;
@@ -545,6 +567,7 @@ export async function handleAdd(ctx: Context, db: D1Database) {
 		}
 	} catch (error) {
 		// Error adding expense
+		console.error('Error in handleAdd:', error);
 		await reply(ctx, ERROR_MESSAGES.DATABASE_ERROR);
 	}
 }
