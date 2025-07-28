@@ -192,7 +192,9 @@ export async function handleAdd(ctx: Context, db: D1Database) {
 					// Check if this mention has a custom split
 					const mentionWithSplit = mentions.find((m) => m.substring(1).startsWith(username));
 					if (mentionWithSplit) {
-						unknownMentions.push(mentionWithSplit.split('=')[0]);
+						// For mentions without =, the whole mention is returned
+						const baseMention = mentionWithSplit.includes('=') ? mentionWithSplit.split('=')[0] : mentionWithSplit;
+						unknownMentions.push(baseMention);
 					}
 				}
 			}
