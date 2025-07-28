@@ -6,7 +6,7 @@ import { generateInsight } from '../utils/smart-insights';
 import { reply } from '../utils/reply';
 import { formatCurrency } from '../utils/currency';
 import { checkBudgetAfterExpense } from '../utils/budget-alerts';
-import { parseEnhancedSplits, formatSplitInfo } from '../utils/split-parser';
+import { parseEnhancedSplits } from '../utils/split-parser';
 
 // Enhanced categorization with emoji detection and context
 function suggestCategory(description: string, amount?: number): string | null {
@@ -259,10 +259,10 @@ export async function handleAdd(ctx: Context, db: D1Database) {
 				} else {
 					const members = await db.prepare('SELECT user_id FROM group_members WHERE group_id = ? AND active = TRUE').bind(groupId).all();
 
-					participants = members.results.map((m) => ({ userId: m.user_id as string }));
-					
-					// If no active members found, just use the payer
-					if (participants.length === 0) {
+					if (members.results && members.results.length > 0) {
+						participants = members.results.map((m) => ({ userId: m.user_id as string }));
+					} else {
+						// If no active members found, just use the payer
 						participants = [{ userId: paidBy }];
 					}
 				}
@@ -321,6 +321,11 @@ export async function handleAdd(ctx: Context, db: D1Database) {
 					participants.push({ userId: paidBy });
 				}
 			}
+		}
+
+		// Ensure we have at least one participant
+		if (!isPersonal && participants.length === 0) {
+			participants = [{ userId: paidBy }];
 		}
 
 		// Validate splits (not for personal expenses)
