@@ -1,7 +1,7 @@
 #:schema node_modules/wrangler/config-schema.json
 name = "finpals-telegram"
 main = "src/index.ts"
-compatibility_date = "2024-11-11"
+compatibility_date = "2025-05-05"
 compatibility_flags = ["nodejs_compat"]
 
 # Add your Cloudflare account ID here
@@ -11,7 +11,7 @@ account_id = "7a041c2905e112bf0752fd7c8e577f15"
 # These will be set as secrets in Cloudflare dashboard or via wrangler secret
 # BOT_TOKEN and TELEGRAM_BOT_API_SECRET_TOKEN should be set as secrets
 ENV = "development"
-BOT_TOKEN="8032355908:AAGNPQVimcJi_sOnLGf5K2ZnrgWlHy4srbY"
+BOT_TOKEN="7594760757:AAEwF9t5xOYzUmIRN8np8647PKMHKblSRv8"
 TELEGRAM_BOT_API_SECRET_TOKEN="3C2BE62791F90E6561D4BFBBCF7242DF526BF39E0B925BE485A8FF0F1C96CB24"
 # Exchange Rate API key (optional - will use mock rates if not provided)
 # Get free API key from https://app.exchangerate-api.com/sign-up
