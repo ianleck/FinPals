@@ -275,7 +275,11 @@ export async function handleAdd(ctx: Context, db: D1Database) {
 			.bind(ctx.from!.id.toString(), ctx.from!.username || null, ctx.from!.first_name || null)
 			.run();
 			
-		// Note: Pending users will be created after we process mentions
+		// If payer is pending, ensure they're in the pending users map
+		if (paidBy.startsWith('pending_') && !pendingUsers.has(paidBy)) {
+			const payerUsername = paidBy.substring('pending_'.length);
+			pendingUsers.set(paidBy, payerUsername);
+		}
 
 		// Get participants based on mentions
 		let participants: Array<{ userId: string; amount?: number }> = [];
@@ -380,7 +384,7 @@ export async function handleAdd(ctx: Context, db: D1Database) {
 				}
 
 				// Always include the payer if not already included
-				if (!participants.some((p) => p.userId === paidBy)) {
+				if (!participants.some(p => p.userId === paidBy)) {
 					participants.push({ userId: paidBy });
 				}
 			}
@@ -409,6 +413,16 @@ export async function handleAdd(ctx: Context, db: D1Database) {
 		if (!isPersonal && participants.length === 0) {
 			participants = [{ userId: paidBy }];
 		}
+
+		// Remove duplicate participants (keep the first occurrence)
+		const seen = new Set<string>();
+		participants = participants.filter(p => {
+			if (seen.has(p.userId)) {
+				return false;
+			}
+			seen.add(p.userId);
+			return true;
+		});
 
 		// Validate splits (not for personal expenses)
 		if (!isPersonal) {
@@ -496,7 +510,7 @@ export async function handleAdd(ctx: Context, db: D1Database) {
 			.prepare(
 				'INSERT INTO expenses (id, group_id, trip_id, amount, description, category, paid_by, created_by, is_personal) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
 			)
-			.bind(expenseId, isPersonal ? null : groupId, activeTrip?.id || null, amount, description, category, paidBy, paidBy, isPersonal)
+			.bind(expenseId, isPersonal ? null : groupId, activeTrip?.id || null, amount, description, category, paidBy, ctx.from!.id.toString(), isPersonal)
 			.run();
 
 		// Create splits with batch insert
