@@ -25,6 +25,7 @@ import { handleRecurring, handleRecurringCallbacks } from './commands/recurring'
 import { handleActivity } from './commands/activity';
 import { handleFriend, handleFriendActivity } from './commands/friend';
 import { handleInfo } from './commands/info';
+import { handleFixDuplicates } from './commands/fix-duplicates';
 import { trackGroupMetadata } from './utils/group-tracker';
 import type { SessionData } from './utils/session';
 import { COMMANDS, EXPENSE_CATEGORIES } from './utils/constants';
@@ -195,6 +196,7 @@ const worker = {
 			bot.command(COMMANDS.FRIEND, (ctx) => handleFriend(ctx, env.DB));
 			bot.command(COMMANDS.HELP, (ctx) => handleHelp(ctx, env.DB));
 			bot.command(COMMANDS.INFO, (ctx) => handleInfo(ctx));
+			bot.command(COMMANDS.FIX_DUPLICATES, (ctx) => handleFixDuplicates(ctx, env.DB));
 			bot.command('test', (ctx) => handleTest(ctx));
 
 			// Handle delete with underscore format (from expenses list)
@@ -220,30 +222,81 @@ const worker = {
 			bot.callbackQuery('add_expense_help', async (ctx) => {
 				await ctx.answerCallbackQuery();
 				const isPrivate = ctx.chat?.type === 'private';
+				const userId = ctx.from?.id.toString();
+				const groupId = ctx.chat?.id.toString();
 				
-				if (isPrivate) {
-					await ctx.reply(
-						'💵 <b>Adding Personal Expenses</b>\n\n' +
-							'Use: <code>/add [amount] [description]</code>\n\n' +
-							'Examples:\n' +
-							'• <code>/add 50 groceries</code> - Track grocery expense\n' +
-							'• <code>/add 30.50 coffee</code> - Track coffee expense\n' +
-							'• <code>/add 120 dinner out</code> - Track restaurant expense\n\n' +
-							'Expenses are private and only visible to you. They will be automatically categorized!',
-						{ parse_mode: 'HTML' }
-					);
-				} else {
-					await ctx.reply(
-						'💵 <b>Adding Expenses</b>\n\n' +
-							'Use: <code>/add [amount] [description] [@mentions]</code>\n\n' +
-							'Examples:\n' +
-							'• <code>/add 50 dinner</code> - Split $50 dinner with everyone\n' +
-							'• <code>/add 120 uber @john @sarah</code> - Split $120 uber with John and Sarah\n' +
-							'• <code>/add 30.50 coffee @mike</code> - Split $30.50 coffee with Mike\n\n' +
-							"If you don't mention anyone, the expense will be split between all active group members.",
-						{ parse_mode: 'HTML' }
-					);
+				// Get recent expenses to suggest
+				let recentExpenses: any[] = [];
+				if (userId) {
+					try {
+						const query = isPrivate
+							? `SELECT DISTINCT description, amount, category 
+							   FROM expenses 
+							   WHERE created_by = ? AND is_personal = TRUE 
+							   ORDER BY created_at DESC 
+							   LIMIT 3`
+							: `SELECT DISTINCT e.description, e.amount, e.category
+							   FROM expenses e
+							   WHERE e.group_id = ? AND e.created_by = ? AND e.deleted = FALSE
+							   ORDER BY e.created_at DESC
+							   LIMIT 3`;
+						
+						const result = await env.DB
+							.prepare(query)
+							.bind(isPrivate ? userId : groupId, isPrivate ? undefined : userId)
+							.all();
+						
+						recentExpenses = result.results || [];
+					} catch (error) {
+						console.error('Error fetching recent expenses:', error);
+					}
 				}
+				
+				// Build quick add interface
+				let message = '💵 <b>Quick Add Expense</b>\n\n';
+				
+				// Common amounts buttons
+				const commonAmounts = isPrivate
+					? [
+						[{ text: '☕ $5 Coffee', callback_data: 'quick_add:5:coffee' }],
+						[{ text: '🍽️ $15 Lunch', callback_data: 'quick_add:15:lunch' }],
+						[{ text: '🛒 $50 Groceries', callback_data: 'quick_add:50:groceries' }],
+					]
+					: [
+						[{ text: '☕ $10 Coffee', callback_data: 'quick_add:10:coffee:split' }],
+						[{ text: '🍽️ $60 Lunch', callback_data: 'quick_add:60:lunch:split' }],
+						[{ text: '🚕 $30 Uber', callback_data: 'quick_add:30:uber:split' }],
+					];
+				
+				// Recent expenses if any
+				const recentButtons = recentExpenses.slice(0, 2).map(exp => [{
+					text: `↻ $${exp.amount} ${exp.description}`,
+					callback_data: `quick_add:${exp.amount}:${exp.description.substring(0, 20)}:${isPrivate ? 'personal' : 'split'}`
+				}]);
+				
+				const keyboard = [
+					...commonAmounts,
+					...recentButtons,
+					[{ text: '📝 Custom Expense', callback_data: 'add_expense_custom' }],
+					[{ text: '❌ Cancel', callback_data: 'close' }]
+				];
+				
+				if (recentExpenses.length > 0) {
+					message += '<b>Recent:</b>\n';
+					recentExpenses.forEach(exp => {
+						message += `• $${exp.amount} - ${exp.description}\n`;
+					});
+					message += '\n';
+				}
+				
+				message += isPrivate
+					? 'Choose a quick expense or create custom:'
+					: 'Choose a quick expense to split with everyone:';
+				
+				await ctx.reply(message, {
+					parse_mode: 'HTML',
+					reply_markup: { inline_keyboard: keyboard }
+				});
 			});
 
 			bot.callbackQuery('budget_help', async (ctx) => {
@@ -516,6 +569,53 @@ const worker = {
 					console.error('Error navigating personal expenses:', error);
 					await ctx.answerCallbackQuery('Error loading expenses');
 				}
+			});
+
+			// Handle quick add
+			bot.callbackQuery(/^quick_add:/, async (ctx) => {
+				await ctx.answerCallbackQuery();
+				const data = ctx.callbackQuery.data.split(':');
+				const amount = data[1];
+				const description = data[2];
+				const type = data[3]; // 'personal' or 'split'
+				
+				// Execute the add command
+				const command = type === 'personal' || ctx.chat?.type === 'private'
+					? `/add ${amount} ${description}`
+					: `/add ${amount} ${description}`;
+				
+				// Create a fake message context for handleAdd
+				const fakeCtx = {
+					...ctx,
+					message: {
+						message_id: ctx.callbackQuery.message?.message_id || 0,
+						date: ctx.callbackQuery.message?.date || Date.now(),
+						chat: ctx.chat!,
+						text: command,
+						entities: [],
+						from: ctx.from
+					}
+				};
+				
+				// Delete the quick add menu
+				await ctx.deleteMessage();
+				
+				// Process the expense
+				await handleAdd(fakeCtx as any, env.DB);
+			});
+
+			// Handle custom expense
+			bot.callbackQuery('add_expense_custom', async (ctx) => {
+				await ctx.answerCallbackQuery();
+				await ctx.deleteMessage();
+				
+				const isPrivate = ctx.chat?.type === 'private';
+				await ctx.reply(
+					isPrivate
+						? '💵 To add a custom expense, use:\n<code>/add [amount] [description]</code>\n\nExample: <code>/add 25.50 lunch</code>'
+						: '💵 To add a custom expense, use:\n<code>/add [amount] [description] [@mentions]</code>\n\nExamples:\n• <code>/add 50 dinner</code> - Split with everyone\n• <code>/add 30 coffee @john</code> - Split with John',
+					{ parse_mode: 'HTML' }
+				);
 			});
 
 			// Handle close button

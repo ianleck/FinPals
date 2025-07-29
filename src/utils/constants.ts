@@ -68,6 +68,7 @@ export const COMMANDS = {
 	ACTIVITY: 'activity',
 	FRIEND: 'friend',
 	INFO: 'info',
+	FIX_DUPLICATES: 'fixduplicates',
 };
 
 export const ERROR_MESSAGES = {

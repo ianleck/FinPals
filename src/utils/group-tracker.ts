@@ -1,5 +1,6 @@
 import { Context } from 'grammy';
 import { Env } from '../index';
+import { checkAndReconcileUser } from './reconcile-pending-users';
 
 type MyContext = Context & { env: Env };
 
@@ -41,6 +42,10 @@ export async function trackGroupMetadata(ctx: MyContext): Promise<void> {
 			const username = ctx.from.username || null;
 			const firstName = ctx.from.first_name || null;
 
+			// IMPORTANT: Reconcile pending user BEFORE creating/updating the real user
+			// This prevents duplicate entries when a pending user becomes active
+			await checkAndReconcileUser(ctx.env.DB, userId, username);
+
 			// Ensure user exists
 			await ctx.env.DB.prepare(
 				'INSERT OR IGNORE INTO users (telegram_id, username, first_name) VALUES (?, ?, ?)'
@@ -77,6 +82,9 @@ export async function trackGroupMetadata(ctx: MyContext): Promise<void> {
 					const newUserId = newMember.id.toString();
 					const newUsername = newMember.username || null;
 					const newFirstName = newMember.first_name || null;
+
+					// Reconcile if they were previously added as pending
+					await checkAndReconcileUser(ctx.env.DB, newUserId, newUsername);
 
 					// Ensure user exists
 					await ctx.env.DB.prepare(
