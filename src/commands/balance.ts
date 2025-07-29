@@ -1,6 +1,5 @@
 import { Context } from 'grammy';
 import { reply } from '../utils/reply';
-import { getSimplifiedSettlementPlan } from '../utils/debt-simplification';
 
 interface BalanceResult {
 	user1: string;
@@ -182,34 +181,50 @@ export async function handleBalance(ctx: Context, db: D1Database, tripId?: strin
 			return;
 		}
 
+		// Use debt simplification for cleaner display
+		const { simplifyDebts } = await import('../utils/debt-simplification');
+		const simplifiedDebts = await simplifyDebts(db, groupId, filterTripId);
+		
 		// Format balances for display
 		let message = '💰 <b>Current Balances</b>';
 		if (tripInfo) {
 			message += ` - ${tripInfo.name}`;
 		}
 		message += '\n\n';
-		let totalUnsettled = 0;
+		
+		if (simplifiedDebts.length === 0) {
+			// If simplification returns no debts but we have balances, show raw balances
+			// This shouldn't happen but is a fallback
+			let totalUnsettled = 0;
+			for (const balance of balances.results) {
+				const user1Name = balance.user1_username || balance.user1_first_name || 'User';
+				const user2Name = balance.user2_username || balance.user2_first_name || 'User';
+				const amount = Math.abs(balance.net_amount);
+				totalUnsettled += amount;
 
-		for (const balance of balances.results) {
-			const user1Name = balance.user1_username || balance.user1_first_name || 'User';
-			const user2Name = balance.user2_username || balance.user2_first_name || 'User';
-			const amount = Math.abs(balance.net_amount);
-			totalUnsettled += amount;
-
-			if (balance.net_amount > 0) {
-				message += `@${user2Name} owes @${user1Name}: <b>$${amount.toFixed(2)}</b>\n`;
-			} else {
-				message += `@${user1Name} owes @${user2Name}: <b>$${amount.toFixed(2)}</b>\n`;
+				if (balance.net_amount > 0) {
+					message += `@${user2Name} owes @${user1Name}: <b>$${amount.toFixed(2)}</b>\n`;
+				} else {
+					message += `@${user1Name} owes @${user2Name}: <b>$${amount.toFixed(2)}</b>\n`;
+				}
 			}
+			message += `\n💵 Total unsettled: <b>$${totalUnsettled.toFixed(2)}</b>`;
+		} else {
+			// Show simplified debts
+			let totalAmount = 0;
+			for (const debt of simplifiedDebts) {
+				const { fromName, toName, amount } = debt;
+				message += `@${fromName || 'User'} owes @${toName || 'User'}: <b>$${amount.toFixed(2)}</b>\n`;
+				totalAmount += amount;
+			}
+			message += `\n💵 Total to settle: <b>$${totalAmount.toFixed(2)}</b>`;
+			message += '\n\n💡 <i>Showing simplified payments</i>';
 		}
 
-		message += `\n💵 Total unsettled: <b>$${totalUnsettled.toFixed(2)}</b>`;
-
-		// Add simplified settlement button if there are balances
+		// Add settle button
 		const buttons = [];
 		if (balances.results.length > 0) {
 			buttons.push([
-				{ text: '💡 Simplify Debts', callback_data: `simplify_debts:${filterTripId || ''}` },
 				{ text: '💸 Settle Up', callback_data: 'show_settle_balances' }
 			]);
 		}

@@ -81,7 +81,7 @@ async function calculateNetBalances(
     groupId: string,
     tripId?: string
 ): Promise<Balance[]> {
-    const tripFilter = tripId ? 'AND e.trip_id = ?' : 'AND e.trip_id IS NULL';
+    const tripFilter = tripId ? 'AND e.trip_id = ?' : '';
     const tripParams = tripId ? [tripId] : [];
     
     // Get all expenses and settlements
@@ -91,7 +91,9 @@ async function calculateNetBalances(
             SELECT 
                 e.paid_by as user_id,
                 SUM(e.amount) as paid_amount,
-                0 as owed_amount
+                0 as owed_amount,
+                0 as settlement_paid,
+                0 as settlement_received
             FROM expenses e
             WHERE e.group_id = ? 
                 AND e.deleted = FALSE
@@ -104,7 +106,9 @@ async function calculateNetBalances(
             SELECT 
                 es.user_id,
                 0 as paid_amount,
-                SUM(es.amount) as owed_amount
+                SUM(es.amount) as owed_amount,
+                0 as settlement_paid,
+                0 as settlement_received
             FROM expense_splits es
             JOIN expenses e ON es.expense_id = e.id
             WHERE e.group_id = ? 
@@ -116,6 +120,8 @@ async function calculateNetBalances(
             -- Money paid in settlements
             SELECT 
                 s.from_user as user_id,
+                0 as paid_amount,
+                0 as owed_amount,
                 -SUM(s.amount) as settlement_paid,
                 0 as settlement_received
             FROM settlements s
@@ -128,6 +134,8 @@ async function calculateNetBalances(
             -- Money received in settlements
             SELECT 
                 s.to_user as user_id,
+                0 as paid_amount,
+                0 as owed_amount,
                 0 as settlement_paid,
                 SUM(s.amount) as settlement_received
             FROM settlements s

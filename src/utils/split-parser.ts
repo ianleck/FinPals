@@ -25,7 +25,7 @@ export function parseEnhancedSplits(args: string[], totalAmount: number): Parsed
     const splits = new Map<string, SplitInfo>();
     let hasPercentages = false;
     let hasAmounts = false;
-    let hasShares = true;
+    let hasShares = false;  // Default to false, only set true if we find shares
     let totalShares = 0;
     let totalPercentage = 0;
     let totalFixedAmount = 0;
@@ -61,6 +61,9 @@ export function parseEnhancedSplits(args: string[], totalAmount: number): Parsed
                         userId: mention.substring(1)
                     });
                     totalShares += value;
+                    
+                    // Assume it's a share unless proven otherwise
+                    hasShares = true;
                     
                     // If it has decimals or is large, likely an amount
                     if (!Number.isInteger(value) || value > totalAmount * 0.5) {
@@ -172,11 +175,20 @@ export function parseEnhancedSplits(args: string[], totalAmount: number): Parsed
         }
     }
 
-    return {
+    const result = {
         mentions,
         splits: finalSplits,
         hasCustomSplits: hasPercentages || hasAmounts || hasShares
     };
+    
+    console.log('Split parser internal state:', {
+        hasPercentages,
+        hasAmounts,
+        hasShares,
+        hasCustomSplits: result.hasCustomSplits
+    });
+    
+    return result;
 }
 
 /**

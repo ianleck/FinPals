@@ -2,7 +2,7 @@ import { Bot, Context, SessionFlavor, webhookCallback } from 'grammy';
 import { setupSession } from './utils/session';
 import type { D1Database, DurableObjectNamespace } from '@cloudflare/workers-types';
 import { handleStart } from './commands/start';
-import { handleAddEnhanced as handleAdd } from './commands/add-enhanced';
+import { handleAdd } from './commands/add';
 import { handleBalance } from './commands/balance';
 import { handleSettle, handleSettleCallback } from './commands/settle';
 import { handleStats } from './commands/stats';

@@ -170,6 +170,7 @@ export async function handleAdd(ctx: Context, db: D1Database) {
 	}
 	
 	const { mentions, splits: enhancedSplits, hasCustomSplits } = parsedSplits;
+	
 
 	// Get participants
 	const groupId = ctx.chat?.id.toString() || '';
@@ -180,6 +181,7 @@ export async function handleAdd(ctx: Context, db: D1Database) {
 	const mentionedUserIds: string[] = [];
 	const unknownMentions: string[] = [];
 	const userIdToUsername = new Map<string, string>();
+	const pendingUsers = new Map<string, string>(); // tempUserId -> username
 
 	if (mentions.length > 0 && ctx.message?.entities) {
 		for (const entity of ctx.message.entities) {
@@ -228,6 +230,8 @@ export async function handleAdd(ctx: Context, db: D1Database) {
 			.prepare('INSERT OR IGNORE INTO users (telegram_id, username, first_name) VALUES (?, ?, ?)')
 			.bind(paidBy, ctx.from!.username || null, ctx.from!.first_name || null)
 			.run();
+			
+		// Note: Pending users will be created after we process mentions
 
 		// Get participants based on mentions
 		let participants: Array<{ userId: string; amount?: number }> = [];
@@ -313,7 +317,20 @@ export async function handleAdd(ctx: Context, db: D1Database) {
 								amount: splitInfo ? splitInfo.value : undefined 
 							});
 						} else {
-							warningMessage += `\n⚠️ ${mention} hasn't interacted with the bot yet - their share will be split among others`;
+							// User not found in database - create a pending entry for them
+							// Generate a temporary user ID based on username
+							const tempUserId = `pending_${username}`;
+							
+							// Add to participants with the mention's split info
+							const splitInfo = enhancedSplits.get(mention);
+							participants.push({ 
+								userId: tempUserId, 
+								amount: splitInfo ? splitInfo.value : undefined 
+							});
+							
+							// Store username for later user creation
+							pendingUsers.set(tempUserId, username);
+							warningMessage += `\n⚠️ ${mention} will be notified when they start using FinPals`;
 						}
 					}
 				}
@@ -332,9 +349,18 @@ export async function handleAdd(ctx: Context, db: D1Database) {
 
 		// Validate splits (not for personal expenses)
 		if (!isPersonal) {
+			// Detect if this is a simple mention without custom amounts
+			// The split parser sees @mention without = as equal split, but since it doesn't
+			// know about the payer, it assigns the full amount to the single mention
+			const isSimpleMention = mentions.length > 0 && !mentionArgs.some(arg => arg.includes('='));
+			
 			// Enhanced parser already validated and calculated amounts
 			// Just ensure all participants have amounts
-			if (!hasCustomSplits) {
+			if (!hasCustomSplits || isSimpleMention) {
+				// For equal splits, clear any pre-assigned amounts and recalculate
+				// This handles the case where split parser assigned full amount to single mention
+				participants.forEach((p) => delete p.amount);
+				
 				// Even split for all participants
 				const splitAmount = amount / participants.length;
 				participants.forEach((p) => (p.amount = splitAmount));
@@ -366,6 +392,11 @@ export async function handleAdd(ctx: Context, db: D1Database) {
 				);
 				return;
 			}
+		}
+
+		// Create pending users if any (must be done before creating expense splits)
+		if (pendingUsers.size > 0 && !isPersonal) {
+			await createPendingUsers(db, pendingUsers, groupId);
 		}
 
 		// Auto-categorize
@@ -414,11 +445,16 @@ export async function handleAdd(ctx: Context, db: D1Database) {
 			const bindings: any[] = [];
 			
 			for (const participant of participants) {
-				bindings.push(expenseId, participant.userId, participant.amount!);
+				// Ensure amount is defined
+				if (participant.amount === undefined) {
+					throw new Error('Invalid participant amount');
+				}
 				
-				// Collect users to notify (except the payer)
-				if (participant.userId !== paidBy) {
-					notifyUsers.push({ userId: participant.userId, amount: participant.amount! });
+				bindings.push(expenseId, participant.userId, participant.amount);
+				
+				// Collect users to notify (except the payer and pending users)
+				if (participant.userId !== paidBy && !participant.userId.startsWith('pending_')) {
+					notifyUsers.push({ userId: participant.userId, amount: participant.amount });
 				}
 			}
 			
@@ -529,24 +565,26 @@ export async function handleAdd(ctx: Context, db: D1Database) {
 		// Note: Auto-deletion of bot messages not supported in serverless environment
 		// User message has already been deleted
 
-		// Check budget alerts for all participants
+		// Check budget alerts for all participants (except pending users)
 		if (category && participants.length > 0) {
 			const bot = ctx.api;
 			await Promise.all(
-				participants.map(async (participant) => {
-					try {
-						await checkBudgetAfterExpense(
-							db, 
-							bot as any, 
-							participant.userId, 
-							groupId, 
-							participant.amount || 0, 
-							category
-						);
-					} catch (error) {
-						console.error('Error checking budget for user:', participant.userId, error);
-					}
-				})
+				participants
+					.filter(p => !p.userId.startsWith('pending_'))
+					.map(async (participant) => {
+						try {
+							await checkBudgetAfterExpense(
+								db, 
+								bot as any, 
+								participant.userId, 
+								groupId, 
+								participant.amount || 0, 
+								category
+							);
+						} catch (error) {
+							console.error('Error checking budget for user:', participant.userId, error);
+						}
+					})
 			);
 		}
 
@@ -576,5 +614,19 @@ export async function handleAdd(ctx: Context, db: D1Database) {
 		// Error adding expense
 		console.error('Error in handleAdd:', error);
 		await reply(ctx, ERROR_MESSAGES.DATABASE_ERROR);
+	}
+}
+
+async function createPendingUsers(db: D1Database, pendingUsers: Map<string, string>, groupId: string) {
+	for (const [tempUserId, username] of pendingUsers) {
+		await db
+			.prepare('INSERT OR IGNORE INTO users (telegram_id, username, first_name) VALUES (?, ?, ?)')
+			.bind(tempUserId, username, `Pending: @${username}`)
+			.run();
+			
+		await db
+			.prepare('INSERT OR IGNORE INTO group_members (group_id, user_id, active) VALUES (?, ?, TRUE)')
+			.bind(groupId, tempUserId)
+			.run();
 	}
 }

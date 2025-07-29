@@ -178,94 +178,28 @@ export async function showUnsettledBalances(ctx: Context, db: D1Database) {
 	const groupId = ctx.chat!.id.toString();
 
 	try {
-		// Get all unsettled balances in the group
-		const balances = await db.prepare(`
-			WITH expense_balances AS (
-				SELECT 
-					e.paid_by as creditor,
-					es.user_id as debtor,
-					SUM(es.amount) as amount
-				FROM expenses e
-				JOIN expense_splits es ON e.id = es.expense_id
-				WHERE e.group_id = ? AND e.deleted = FALSE
-				GROUP BY e.paid_by, es.user_id
-			),
-			settlement_balances AS (
-				SELECT 
-					to_user as creditor,
-					from_user as debtor,
-					SUM(amount) as amount
-				FROM settlements
-				WHERE group_id = ?
-				GROUP BY to_user, from_user
-			),
-			all_balances AS (
-				SELECT creditor, debtor, amount FROM expense_balances
-				UNION ALL
-				SELECT creditor, debtor, -amount FROM settlement_balances
-			),
-			net_balances AS (
-				SELECT 
-					CASE WHEN creditor < debtor THEN creditor ELSE debtor END as user1,
-					CASE WHEN creditor < debtor THEN debtor ELSE creditor END as user2,
-					SUM(CASE WHEN creditor < debtor THEN amount ELSE -amount END) as net_amount
-				FROM all_balances
-				WHERE creditor != debtor
-				GROUP BY user1, user2
-				HAVING ABS(net_amount) > 0.01
-			)
-			SELECT 
-				nb.*,
-				u1.username as user1_username,
-				u1.first_name as user1_first_name,
-				u2.username as user2_username,
-				u2.first_name as user2_first_name
-			FROM net_balances nb
-			LEFT JOIN users u1 ON nb.user1 = u1.telegram_id
-			LEFT JOIN users u2 ON nb.user2 = u2.telegram_id
-			ORDER BY ABS(net_amount) DESC
-		`).bind(groupId, groupId).all();
+		// Use debt simplification to get optimized settlement plan
+		const { simplifyDebts } = await import('../utils/debt-simplification');
+		const simplifiedDebts = await simplifyDebts(db, groupId);
 
-		if (!balances.results || balances.results.length === 0) {
+		if (simplifiedDebts.length === 0) {
 			await reply(ctx, '✅ All settled up! No outstanding balances.');
 			return;
 		}
 
-		let message = '💳 <b>Unsettled Balances</b>\n\n';
+		let message = '💳 <b>Unsettled Balances</b> (Simplified)\n\n';
 		const inlineButtons = [];
 
-		for (const balance of balances.results) {
-			const user1Name = (balance.user1_username as string) || (balance.user1_first_name as string) || 'User';
-			const user2Name = (balance.user2_username as string) || (balance.user2_first_name as string) || 'User';
-			const amount = Math.abs(balance.net_amount as number);
-
-			let owerId: string;
-			let owerName: string;
-			let owedId: string;
-			let owedName: string;
-
-			if ((balance.net_amount as number) > 0) {
-				// user2 owes user1
-				owerId = balance.user2 as string;
-				owerName = user2Name;
-				owedId = balance.user1 as string;
-				owedName = user1Name;
-			} else {
-				// user1 owes user2
-				owerId = balance.user1 as string;
-				owerName = user1Name;
-				owedId = balance.user2 as string;
-				owedName = user2Name;
-			}
-
-			message += `@${owerName} owes @${owedName}: <b>$${amount.toFixed(2)}</b>\n`;
+		for (const debt of simplifiedDebts) {
+			const { from, to, amount, fromName, toName } = debt;
+			message += `@${fromName || 'User'} owes @${toName || 'User'}: <b>$${amount.toFixed(2)}</b>\n`;
 
 			// Create settle buttons with format: settle_{owerId}_{owedId}_{amount}
 			const fullButtonText = `💰 Settle $${amount.toFixed(2)}`;
-			const fullCallbackData = `settle_${owerId}_${owedId}_${amount.toFixed(2)}_full`;
+			const fullCallbackData = `settle_${from}_${to}_${amount.toFixed(2)}_full`;
 			
 			const partialButtonText = `💵 Partial Payment`;
-			const partialCallbackData = `settle_${owerId}_${owedId}_${amount.toFixed(2)}_partial`;
+			const partialCallbackData = `settle_${from}_${to}_${amount.toFixed(2)}_partial`;
 			
 			// Add buttons for this balance
 			inlineButtons.push([
