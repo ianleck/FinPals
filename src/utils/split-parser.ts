@@ -12,6 +12,7 @@ export interface ParsedSplits {
     mentions: string[];
     splits: Map<string, SplitInfo>;
     hasCustomSplits: boolean;
+    paidBy?: string;  // Optional paid by user (@username)
 }
 
 /**
@@ -19,6 +20,7 @@ export interface ParsedSplits {
  * @john=50 - Fixed amount
  * @john=50% - Percentage
  * @john=2 @mary=1 - Shares (if all are integers without % and total < expense amount)
+ * paid:@john - Specify who paid (if not the message sender)
  */
 export function parseEnhancedSplits(args: string[], totalAmount: number): ParsedSplits {
     const mentions: string[] = [];
@@ -29,9 +31,16 @@ export function parseEnhancedSplits(args: string[], totalAmount: number): Parsed
     let totalShares = 0;
     let totalPercentage = 0;
     let totalFixedAmount = 0;
+    let paidBy: string | undefined;
 
     // First pass - parse all splits
     for (const arg of args) {
+        // Check for paid:@username syntax
+        if (arg.startsWith('paid:@')) {
+            paidBy = arg.substring(5); // Remove 'paid:' prefix, keep @username
+            continue;
+        }
+        
         if (!arg.startsWith('@')) continue;
 
         if (arg.includes('=')) {
@@ -178,15 +187,9 @@ export function parseEnhancedSplits(args: string[], totalAmount: number): Parsed
     const result = {
         mentions,
         splits: finalSplits,
-        hasCustomSplits: hasPercentages || hasAmounts || hasShares
+        hasCustomSplits: hasPercentages || hasAmounts || hasShares,
+        paidBy
     };
-    
-    console.log('Split parser internal state:', {
-        hasPercentages,
-        hasAmounts,
-        hasShares,
-        hasCustomSplits: result.hasCustomSplits
-    });
     
     return result;
 }

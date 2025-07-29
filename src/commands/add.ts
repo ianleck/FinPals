@@ -8,6 +8,12 @@ import { formatCurrency } from '../utils/currency';
 import { checkBudgetAfterExpense } from '../utils/budget-alerts';
 import { parseEnhancedSplits } from '../utils/split-parser';
 
+const WARNINGS = {
+	NOT_ENROLLED: (mention: string) => `\n⚠️ ${mention} will be notified when they start using FinPals`,
+	AUTO_INCLUDED: '\n💡 You were included in the split (add yourself to mentions to customize your share)',
+	NOT_INCLUDED: '\n💡 You were not included in this split'
+};
+
 // Enhanced categorization with emoji detection and context
 function suggestCategory(description: string, amount?: number): string | null {
 	const lowerDesc = description.toLowerCase();
@@ -121,7 +127,9 @@ export async function handleAdd(ctx: Context, db: D1Database) {
 			  '• /add 120 lunch @john @sarah - Split evenly\n' +
 			  '• /add 120 lunch @john=50 @sarah=70 - Fixed amounts\n' +
 			  '• /add 100 dinner @john=60% @sarah=40% - Percentages\n' +
-			  '• /add 90 pizza @john=2 @sarah=1 - By shares';
+			  '• /add 90 pizza @john=2 @sarah=1 - By shares\n' +
+			  '• /add 50 coffee paid:@john - John paid, split with all\n' +
+			  '• /add 30 lunch paid:@john @sarah - John paid, split only with Sarah';
 		
 		await replyAndCleanup(
 			ctx,
@@ -150,7 +158,7 @@ export async function handleAdd(ctx: Context, db: D1Database) {
 		}
 	} else {
 		for (let i = 1; i < args.length; i++) {
-			if (args[i].startsWith('@')) {
+			if (args[i].startsWith('@') || args[i].startsWith('paid:@')) {
 				mentionArgs.push(args[i]);
 			} else if (mentionArgs.length === 0) {
 				descriptionParts.push(args[i]);
@@ -159,6 +167,12 @@ export async function handleAdd(ctx: Context, db: D1Database) {
 	}
 
 	const description = descriptionParts.join(' ') || 'Expense';
+	
+	// Validate that paid:@user is not used in personal expenses
+	if (isPersonal && mentionArgs.some(arg => arg.startsWith('paid:@'))) {
+		await replyAndCleanup(ctx, '❌ Cannot use paid:@user in personal expenses', {}, MESSAGE_LIFETIMES.ERROR);
+		return;
+	}
 	
 	// Use enhanced split parser
 	let parsedSplits;
@@ -169,19 +183,47 @@ export async function handleAdd(ctx: Context, db: D1Database) {
 		return;
 	}
 	
-	const { mentions, splits: enhancedSplits, hasCustomSplits } = parsedSplits;
+	const { mentions, splits: enhancedSplits, hasCustomSplits, paidBy: paidByMention } = parsedSplits;
 	
 
 	// Get participants
 	const groupId = ctx.chat?.id.toString() || '';
-	const paidBy = ctx.from!.id.toString();
-	const paidByUsername = ctx.from!.username || ctx.from!.first_name || 'Unknown';
-
+	let paidBy = ctx.from!.id.toString();
+	let paidByUsername = ctx.from!.username || ctx.from!.first_name || 'Unknown';
+	
 	// Parse mentions from the message entities
 	const mentionedUserIds: string[] = [];
 	const unknownMentions: string[] = [];
 	const userIdToUsername = new Map<string, string>();
 	const pendingUsers = new Map<string, string>(); // tempUserId -> username
+	
+	// Check if expense is being added on behalf of someone else
+	if (paidByMention && !isPersonal) {
+		const paidByUsernameFromMention = paidByMention.substring(1); // Remove @
+		
+		// Look up the user who paid
+		const paidByUser = await db
+			.prepare(`
+				SELECT u.telegram_id, u.username, u.first_name
+				FROM users u
+				JOIN group_members gm ON u.telegram_id = gm.user_id
+				WHERE gm.group_id = ? AND gm.active = TRUE AND u.username = ?
+			`)
+			.bind(groupId, paidByUsernameFromMention)
+			.first();
+			
+		if (paidByUser) {
+			paidBy = paidByUser.telegram_id as string;
+			paidByUsername = (paidByUser.username as string) || (paidByUser.first_name as string) || 'User';
+		} else {
+			// User not found - create pending user
+			paidBy = `pending_${paidByUsernameFromMention}`;
+			paidByUsername = paidByUsernameFromMention;
+			
+			// Add to pending users map so it gets created later
+			pendingUsers.set(paidBy, paidByUsernameFromMention);
+		}
+	}
 
 	if (mentions.length > 0 && ctx.message?.entities) {
 		for (const entity of ctx.message.entities) {
@@ -217,18 +259,20 @@ export async function handleAdd(ctx: Context, db: D1Database) {
 					.run();
 			}
 
-			// Ensure payer is in group and active
-			await db.prepare(`
-				INSERT INTO group_members (group_id, user_id, active) 
-				VALUES (?, ?, TRUE)
-				ON CONFLICT(group_id, user_id) DO UPDATE SET active = TRUE
-			`).bind(groupId, paidBy).run();
+			// Ensure payer is in group and active (only if not pending)
+			if (!paidBy.startsWith('pending_')) {
+				await db.prepare(`
+					INSERT INTO group_members (group_id, user_id, active) 
+					VALUES (?, ?, TRUE)
+					ON CONFLICT(group_id, user_id) DO UPDATE SET active = TRUE
+				`).bind(groupId, paidBy).run();
+			}
 		}
 
-		// Ensure payer is in users table
+		// Ensure message sender is always in users table
 		await db
 			.prepare('INSERT OR IGNORE INTO users (telegram_id, username, first_name) VALUES (?, ?, ?)')
-			.bind(paidBy, ctx.from!.username || null, ctx.from!.first_name || null)
+			.bind(ctx.from!.id.toString(), ctx.from!.username || null, ctx.from!.first_name || null)
 			.run();
 			
 		// Note: Pending users will be created after we process mentions
@@ -330,7 +374,7 @@ export async function handleAdd(ctx: Context, db: D1Database) {
 							
 							// Store username for later user creation
 							pendingUsers.set(tempUserId, username);
-							warningMessage += `\n⚠️ ${mention} will be notified when they start using FinPals`;
+							warningMessage += WARNINGS.NOT_ENROLLED(mention);
 						}
 					}
 				}
@@ -338,6 +382,25 @@ export async function handleAdd(ctx: Context, db: D1Database) {
 				// Always include the payer if not already included
 				if (!participants.some((p) => p.userId === paidBy)) {
 					participants.push({ userId: paidBy });
+				}
+			}
+		}
+
+		// Handle expense adder inclusion when using paid:@user
+		if (!isPersonal && paidByMention && paidBy !== ctx.from!.id.toString()) {
+			const adderId = ctx.from!.id.toString();
+			const isAdderIncluded = participants.some(p => p.userId === adderId);
+			const isPayerIncluded = participants.some(p => p.userId === paidBy);
+			const shouldIncludeAdder = mentions.length === 0 || isPayerIncluded;
+			
+			if (!isAdderIncluded) {
+				if (shouldIncludeAdder) {
+					participants.push({ userId: adderId });
+					if (mentions.length > 0) {
+						warningMessage += WARNINGS.AUTO_INCLUDED;
+					}
+				} else {
+					warningMessage += WARNINGS.NOT_INCLUDED;
 				}
 			}
 		}
@@ -523,7 +586,7 @@ export async function handleAdd(ctx: Context, db: D1Database) {
 			: `✅ <b>Expense Added</b>\n\n` +
 			  `💵 Amount: <b>${formatCurrency(amount, 'USD')}</b>\n` +
 			  `📝 Description: ${escapeHtml(description)}\n` +
-			  `👤 Paid by: @${paidByUsername}\n` +
+			  `👤 Paid by: ${formatPaidBy(paidBy, paidByUsername, ctx)}\n` +
 			  `👥 Split: ${participantDisplay}${splitTypeInfo}\n` +
 			  (category ? `📂 Category: ${category} (auto-detected)\n` : '') +
 			  (activeTrip ? `🏝 Trip: ${escapeHtml(activeTrip.name as string)}\n` : '') +
@@ -629,4 +692,13 @@ async function createPendingUsers(db: D1Database, pendingUsers: Map<string, stri
 			.bind(groupId, tempUserId)
 			.run();
 	}
+}
+
+function formatPaidBy(paidBy: string, paidByUsername: string, ctx: Context): string {
+	const isAddedByOther = paidBy !== ctx.from!.id.toString();
+	if (isAddedByOther) {
+		const adderName = ctx.from!.username || ctx.from!.first_name;
+		return `<b>@${paidByUsername}</b> (added by @${adderName})`;
+	}
+	return `@${paidByUsername}`;
 }

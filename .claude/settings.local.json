@@ -21,7 +21,9 @@
       "Bash(git checkout:*)",
       "Bash(npm run:*)",
       "mcp__sequential-thinking__sequentialthinking",
-      "Bash(git --no-pager diff)"
+      "Bash(git --no-pager diff)",
+      "Bash(git --no-pager diff --cached)",
+      "Bash(git --no-pager diff src/commands/add.ts)"
     ],
     "deny": []
   },

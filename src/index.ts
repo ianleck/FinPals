@@ -22,6 +22,9 @@ import { handleBudget } from './commands/budget';
 import { handleTemplates, handleQuickAdd } from './commands/templates';
 import { handleStatus, handleEnrollAll } from './commands/status';
 import { handleRecurring, handleRecurringCallbacks } from './commands/recurring';
+import { handleActivity } from './commands/activity';
+import { handleFriend, handleFriendActivity } from './commands/friend';
+import { handleInfo } from './commands/info';
 import { trackGroupMetadata } from './utils/group-tracker';
 import type { SessionData } from './utils/session';
 import { COMMANDS, EXPENSE_CATEGORIES } from './utils/constants';
@@ -90,7 +93,10 @@ const worker = {
 					{ command: COMMANDS.TEMPLATES, description: 'Manage expense templates' },
 					{ command: COMMANDS.RECURRING, description: 'Manage recurring expenses' },
 					{ command: COMMANDS.STATUS, description: 'Show group enrollment status' },
+					{ command: COMMANDS.ACTIVITY, description: 'View recent activity feed' },
+					{ command: COMMANDS.FRIEND, description: 'View expenses with a specific person' },
 					{ command: COMMANDS.HELP, description: 'Show all available commands' },
+					{ command: COMMANDS.INFO, description: 'Get detailed help for a command' },
 				];
 
 				// Set commands for group chats
@@ -105,6 +111,7 @@ const worker = {
 						{ command: COMMANDS.BUDGET, description: 'Manage personal budgets' },
 						{ command: COMMANDS.PERSONAL, description: 'View cross-group summary' },
 						{ command: COMMANDS.HELP, description: 'Show available commands' },
+						{ command: COMMANDS.INFO, description: 'Get detailed help for a command' },
 					],
 					{
 						scope: { type: 'all_private_chats' },
@@ -184,7 +191,10 @@ const worker = {
 			bot.command(COMMANDS.RECURRING, (ctx) => handleRecurring(ctx, env.DB));
 			bot.command(COMMANDS.STATUS, (ctx) => handleStatus(ctx, env.DB));
 			bot.command(COMMANDS.ENROLL_ALL, (ctx) => handleEnrollAll(ctx, env.DB));
+			bot.command(COMMANDS.ACTIVITY, (ctx) => handleActivity(ctx, env.DB));
+			bot.command(COMMANDS.FRIEND, (ctx) => handleFriend(ctx, env.DB));
 			bot.command(COMMANDS.HELP, (ctx) => handleHelp(ctx, env.DB));
+			bot.command(COMMANDS.INFO, (ctx) => handleInfo(ctx));
 			bot.command('test', (ctx) => handleTest(ctx));
 
 			// Handle delete with underscore format (from expenses list)
@@ -289,6 +299,11 @@ const worker = {
 			bot.callbackQuery('view_history', async (ctx) => {
 				await ctx.answerCallbackQuery();
 				await handleHistory(ctx, env.DB);
+			});
+
+			bot.callbackQuery('view_activity', async (ctx) => {
+				await ctx.answerCallbackQuery();
+				await handleActivity(ctx, env.DB);
 			});
 
 			bot.callbackQuery('view_expenses', async (ctx) => {
@@ -507,6 +522,26 @@ const worker = {
 			bot.callbackQuery('close', async (ctx) => {
 				await ctx.answerCallbackQuery();
 				await ctx.deleteMessage();
+			});
+
+			// Handle info list callback
+			bot.callbackQuery('info_list', async (ctx) => {
+				await ctx.answerCallbackQuery();
+				await handleInfo(ctx);
+			});
+
+			// Handle friend-related callbacks
+			bot.callbackQuery(/^friend_activity_/, async (ctx) => {
+				const friendId = ctx.callbackQuery.data.split('_')[2];
+				await ctx.answerCallbackQuery();
+				await handleFriendActivity(ctx, env.DB, friendId);
+			});
+
+			bot.callbackQuery(/^friend_view_/, async (ctx) => {
+				// Note: friendId is available but handleFriend currently parses from message text
+				// This callback is used for navigation back from friend activity view
+				await ctx.answerCallbackQuery();
+				await ctx.reply('Use /friend @username to view friend details');
 			});
 
 			// Handle trip-related callbacks

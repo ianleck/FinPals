@@ -65,6 +65,9 @@ export const COMMANDS = {
 	RECURRING: 'recurring',
 	STATUS: 'status',
 	ENROLL_ALL: 'enroll_all',
+	ACTIVITY: 'activity',
+	FRIEND: 'friend',
+	INFO: 'info',
 };
 
 export const ERROR_MESSAGES = {

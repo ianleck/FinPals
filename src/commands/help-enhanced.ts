@@ -73,6 +73,7 @@ ${templateShortcuts}
 • Expenses are private to you only
 • Auto-categorization learns from your habits
 • Use /personal to see group expenses too
+• Use /info [command] for detailed help
 		`;
 	} else {
 		helpMessage = `
@@ -85,6 +86,8 @@ Add expense with even or custom splits
 • <code>/add 120 lunch</code> - Split evenly with all
 • <code>/add 120 lunch @john @sarah</code> - Split evenly between mentioned
 • <code>/add 120 lunch @john=50 @sarah=70</code> - Custom amounts
+• <code>/add 50 coffee paid:@john</code> - John paid, split with all
+• <code>/add 30 lunch paid:@john @sarah</code> - John paid, split only with Sarah (excludes you)
 
 /${COMMANDS.EXPENSES} - Browse all expenses with actions
 /${COMMANDS.EDIT} <code>[id] [field] [value]</code> - Edit expense
@@ -118,6 +121,8 @@ ${templateShortcuts}
 <b>📊 Analytics:</b>
 /${COMMANDS.STATS} - Group statistics
 /${COMMANDS.SUMMARY} <code>[month]</code> - Monthly summary
+/${COMMANDS.ACTIVITY} - Recent activity feed
+/${COMMANDS.FRIEND} <code>@user</code> - View shared expenses with a friend
 /${COMMANDS.EXPORT} - Export to CSV
 
 <b>👥 Group Management:</b>
@@ -134,6 +139,7 @@ ${templateShortcuts}
 • Members auto-enroll by sending a message
 • Use /status to see who's enrolled
 • I'll DM people when they're added to expenses
+• Use /info [command] for detailed command help
 		`;
 	}
 
