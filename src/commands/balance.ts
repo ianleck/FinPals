@@ -1,330 +1,252 @@
+/**
+ * Example conversion of balance.ts from D1 to Drizzle ORM
+ * This shows how to migrate commands to use CockroachDB
+ */
+
 import { Context } from 'grammy';
-import { reply } from '../utils/reply';
+import { eq, and, sql, desc, isNull } from 'drizzle-orm';
+import { createDb, withRetry, parseDecimal } from '../db';
+import { expenses, expenseSplits, settlements, groups, users, trips } from '../db/schema';
+import type { Env } from '../index';
 
-interface BalanceResult {
-	user1: string;
-	user2: string;
-	net_amount: number;
-	user1_username?: string;
-	user1_first_name?: string;
-	user2_username?: string;
-	user2_first_name?: string;
+export async function handleBalance(ctx: Context, env: Env, tripId?: string) {
+    if (!ctx.from || !ctx.chat) {
+        await ctx.reply('This command can only be used in a valid chat context.');
+        return;
+    }
+
+    const chatType = ctx.chat.type;
+    const isGroup = chatType === 'group' || chatType === 'supergroup';
+    
+    if (!isGroup) {
+        await ctx.reply('This command can only be used in group chats. Use /personal to manage personal expenses.');
+        return;
+    }
+
+    const groupId = ctx.chat.id.toString();
+    const db = createDb(env);
+
+    try {
+        // Check if group exists
+        const group = await withRetry(async () => {
+            const result = await db
+                .select()
+                .from(groups)
+                .where(eq(groups.telegramId, groupId))
+                .limit(1);
+            return result[0];
+        });
+
+        if (!group) {
+            await ctx.reply('Please use /start first to initialize the bot in this group.');
+            return;
+        }
+
+        // Parse trip filter from command or use provided tripId
+        const commandText = ctx.message?.text || '';
+        const tripArg = tripId || commandText.split(' ')[1];
+        let tripFilter: string | null = null;
+        let tripName = '';
+
+        if (tripArg) {
+            // Check if trip exists
+            const trip = await withRetry(async () => {
+                const result = await db
+                    .select()
+                    .from(trips)
+                    .where(
+                        and(
+                            eq(trips.groupId, groupId),
+                            eq(trips.id, tripArg)
+                        )
+                    )
+                    .limit(1);
+                return result[0];
+            });
+
+            if (trip) {
+                tripFilter = trip.id;
+                tripName = trip.name;
+            }
+        }
+
+        // Calculate balances using Drizzle queries
+        const balances = await withRetry(async () => {
+            // Get all expenses for the group
+            const groupExpenses = await db
+                .select({
+                    id: expenses.id,
+                    amount: expenses.amount,
+                    paidBy: expenses.paidBy,
+                    tripId: expenses.tripId
+                })
+                .from(expenses)
+                .where(
+                    and(
+                        eq(expenses.groupId, groupId),
+                        eq(expenses.deleted, false),
+                        tripFilter ? eq(expenses.tripId, tripFilter) : isNull(expenses.tripId)
+                    )
+                );
+
+            // Get all expense splits
+            const splits = await db
+                .select({
+                    expenseId: expenseSplits.expenseId,
+                    userId: expenseSplits.userId,
+                    amount: expenseSplits.amount
+                })
+                .from(expenseSplits)
+                .innerJoin(expenses, eq(expenseSplits.expenseId, expenses.id))
+                .where(
+                    and(
+                        eq(expenses.groupId, groupId),
+                        eq(expenses.deleted, false),
+                        tripFilter ? eq(expenses.tripId, tripFilter) : isNull(expenses.tripId)
+                    )
+                );
+
+            // Get all settlements
+            const groupSettlements = await db
+                .select({
+                    fromUser: settlements.fromUser,
+                    toUser: settlements.toUser,
+                    amount: settlements.amount
+                })
+                .from(settlements)
+                .where(
+                    and(
+                        eq(settlements.groupId, groupId),
+                        tripFilter ? eq(settlements.tripId, tripFilter) : isNull(settlements.tripId)
+                    )
+                );
+
+            // Calculate net balances
+            const userBalances: Record<string, number> = {};
+
+            // Add amounts paid by users
+            for (const expense of groupExpenses) {
+                const amount = parseDecimal(expense.amount);
+                userBalances[expense.paidBy] = (userBalances[expense.paidBy] || 0) + amount;
+            }
+
+            // Subtract amounts owed by users
+            for (const split of splits) {
+                const amount = parseDecimal(split.amount);
+                userBalances[split.userId] = (userBalances[split.userId] || 0) - amount;
+            }
+
+            // Apply settlements
+            for (const settlement of groupSettlements) {
+                const amount = parseDecimal(settlement.amount);
+                userBalances[settlement.fromUser] = (userBalances[settlement.fromUser] || 0) - amount;
+                userBalances[settlement.toUser] = (userBalances[settlement.toUser] || 0) + amount;
+            }
+
+            return userBalances;
+        });
+
+        // Get user details for display
+        const userIds = Object.keys(balances);
+        const userDetails = await withRetry(async () => {
+            return await db
+                .select({
+                    telegramId: users.telegramId,
+                    firstName: users.firstName,
+                    username: users.username
+                })
+                .from(users)
+                .where(sql`${users.telegramId} IN ${userIds}`);
+        });
+
+        // Create user map for easy lookup
+        const userMap: Record<string, { firstName: string | null; username: string | null }> = {};
+        for (const user of userDetails) {
+            userMap[user.telegramId] = {
+                firstName: user.firstName,
+                username: user.username
+            };
+        }
+
+        // Format balance message
+        let message = tripName ? `💰 *Balances for ${tripName}*\n\n` : '💰 *Current Balances*\n\n';
+        
+        // Sort users by balance (creditors first)
+        const sortedUsers = Object.entries(balances)
+            .filter(([_, balance]) => Math.abs(balance) > 0.01)
+            .sort(([, a], [, b]) => b - a);
+
+        if (sortedUsers.length === 0) {
+            message += '✅ All settled up!';
+        } else {
+            for (const [userId, balance] of sortedUsers) {
+                const user = userMap[userId];
+                const name = user?.firstName || user?.username || 'Unknown';
+                
+                if (balance > 0.01) {
+                    message += `👤 ${name}: *+$${balance.toFixed(2)}* (owed)\n`;
+                } else if (balance < -0.01) {
+                    message += `👤 ${name}: *-$${Math.abs(balance).toFixed(2)}* (owes)\n`;
+                }
+            }
+
+            // Add settlement suggestions
+            message += '\n💡 *Suggested settlements:*\n';
+            const suggestions = calculateSettlements(balances, userMap);
+            for (const suggestion of suggestions) {
+                message += suggestion + '\n';
+            }
+        }
+
+        await ctx.reply(message, { parse_mode: 'Markdown' });
+
+    } catch (error) {
+        await ctx.reply('Sorry, there was an error calculating balances. Please try again later.');
+    }
 }
 
-export async function handleBalance(ctx: Context, db: D1Database, tripId?: string) {
-	const isPersonal = ctx.chat?.type === 'private';
-	const userId = ctx.from?.id.toString();
-	
-	if (isPersonal) {
-		// Show personal expense balance
-		await handlePersonalBalance(ctx, db, userId!);
-		return;
-	}
+function calculateSettlements(
+    balances: Record<string, number>,
+    userMap: Record<string, { firstName: string | null; username: string | null }>
+): string[] {
+    const suggestions: string[] = [];
+    const debtors: Array<[string, number]> = [];
+    const creditors: Array<[string, number]> = [];
 
-	const groupId = ctx.chat?.id.toString() || '';
+    // Separate debtors and creditors
+    for (const [userId, balance] of Object.entries(balances)) {
+        if (balance > 0.01) {
+            creditors.push([userId, balance]);
+        } else if (balance < -0.01) {
+            debtors.push([userId, Math.abs(balance)]);
+        }
+    }
 
-	// Check if filtering by trip or if there's an active trip
-	let filterTripId = tripId;
-	let tripInfo = null;
+    // Sort for optimal settlements
+    debtors.sort((a, b) => b[1] - a[1]);
+    creditors.sort((a, b) => b[1] - a[1]);
 
-	if (!filterTripId) {
-		// Check for active trip
-		const activeTrip = await db
-			.prepare(
-				`
-			SELECT id, name FROM trips 
-			WHERE group_id = ? AND status = 'active'
-			LIMIT 1
-		`
-			)
-			.bind(groupId)
-			.first();
+    // Generate settlement suggestions
+    let i = 0, j = 0;
+    while (i < debtors.length && j < creditors.length) {
+        const [debtorId, debtAmount] = debtors[i];
+        const [creditorId, creditAmount] = creditors[j];
+        
+        const debtorName = userMap[debtorId]?.firstName || userMap[debtorId]?.username || 'Unknown';
+        const creditorName = userMap[creditorId]?.firstName || userMap[creditorId]?.username || 'Unknown';
+        
+        const settleAmount = Math.min(debtAmount, creditAmount);
+        
+        if (settleAmount > 0.01) {
+            suggestions.push(`• ${debtorName} → ${creditorName}: $${settleAmount.toFixed(2)}`);
+        }
+        
+        debtors[i][1] -= settleAmount;
+        creditors[j][1] -= settleAmount;
+        
+        if (debtors[i][1] < 0.01) i++;
+        if (creditors[j][1] < 0.01) j++;
+    }
 
-		if (activeTrip) {
-			filterTripId = activeTrip.id as string;
-			tripInfo = activeTrip;
-		}
-	} else {
-		// Get trip info
-		tripInfo = await db
-			.prepare(
-				`
-			SELECT id, name FROM trips 
-			WHERE id = ?
-			LIMIT 1
-		`
-			)
-			.bind(filterTripId)
-			.first();
-	}
-
-	try {
-		// Build query based on whether we're filtering by trip
-		let query: string;
-		let params: any[];
-
-		if (filterTripId) {
-			// Query with trip filter
-			query = `
-				WITH expense_balances AS (
-					SELECT 
-						e.paid_by as creditor,
-						es.user_id as debtor,
-						SUM(es.amount) as amount
-					FROM expenses e
-					JOIN expense_splits es ON e.id = es.expense_id
-					WHERE e.group_id = ? AND e.trip_id = ? AND e.deleted = FALSE
-					GROUP BY e.paid_by, es.user_id
-				),
-				settlement_balances AS (
-					SELECT 
-						to_user as creditor,
-						from_user as debtor,
-						SUM(amount) as amount
-					FROM settlements
-					WHERE group_id = ? AND trip_id = ?
-					GROUP BY to_user, from_user
-				),
-			all_balances AS (
-				SELECT creditor, debtor, amount FROM expense_balances
-				UNION ALL
-				SELECT creditor, debtor, -amount FROM settlement_balances
-			),
-			net_balances AS (
-				SELECT 
-					CASE WHEN creditor < debtor THEN creditor ELSE debtor END as user1,
-					CASE WHEN creditor < debtor THEN debtor ELSE creditor END as user2,
-					SUM(CASE WHEN creditor < debtor THEN amount ELSE -amount END) as net_amount
-				FROM all_balances
-				WHERE creditor != debtor
-				GROUP BY user1, user2
-				HAVING ABS(net_amount) > 0.01
-			)
-			SELECT 
-				nb.*,
-				u1.username as user1_username,
-				u1.first_name as user1_first_name,
-				u2.username as user2_username,
-				u2.first_name as user2_first_name
-			FROM net_balances nb
-			LEFT JOIN users u1 ON nb.user1 = u1.telegram_id
-			LEFT JOIN users u2 ON nb.user2 = u2.telegram_id
-			ORDER BY ABS(net_amount) DESC
-		`;
-			params = [groupId, filterTripId, groupId, filterTripId];
-		} else {
-			// Query without trip filter (all expenses)
-			query = `
-				WITH expense_balances AS (
-					SELECT 
-						e.paid_by as creditor,
-						es.user_id as debtor,
-						SUM(es.amount) as amount
-					FROM expenses e
-					JOIN expense_splits es ON e.id = es.expense_id
-					WHERE e.group_id = ? AND e.deleted = FALSE
-					GROUP BY e.paid_by, es.user_id
-				),
-				settlement_balances AS (
-					SELECT 
-						to_user as creditor,
-						from_user as debtor,
-						SUM(amount) as amount
-					FROM settlements
-					WHERE group_id = ?
-					GROUP BY to_user, from_user
-				),
-				all_balances AS (
-					SELECT creditor, debtor, amount FROM expense_balances
-					UNION ALL
-					SELECT creditor, debtor, -amount FROM settlement_balances
-				),
-				net_balances AS (
-					SELECT 
-						CASE WHEN creditor < debtor THEN creditor ELSE debtor END as user1,
-						CASE WHEN creditor < debtor THEN debtor ELSE creditor END as user2,
-						SUM(CASE WHEN creditor < debtor THEN amount ELSE -amount END) as net_amount
-					FROM all_balances
-					WHERE creditor != debtor
-					GROUP BY user1, user2
-					HAVING ABS(net_amount) > 0.01
-				)
-				SELECT 
-					nb.*,
-					u1.username as user1_username,
-					u1.first_name as user1_first_name,
-					u2.username as user2_username,
-					u2.first_name as user2_first_name
-				FROM net_balances nb
-				LEFT JOIN users u1 ON nb.user1 = u1.telegram_id
-				LEFT JOIN users u2 ON nb.user2 = u2.telegram_id
-				ORDER BY ABS(net_amount) DESC
-			`;
-			params = [groupId, groupId];
-		}
-
-		const balances = await db
-			.prepare(query)
-			.bind(...params)
-			.all<BalanceResult>();
-
-		if (!balances.results || balances.results.length === 0) {
-			let emptyMessage = '✨ <b>All Settled Up!</b>\n\n';
-			if (tripInfo) {
-				emptyMessage += `No outstanding balances for trip "${tripInfo.name}".\n\n`;
-			} else {
-				emptyMessage += 'No outstanding balances in this group.\n\n';
-			}
-			emptyMessage += 'Start tracking expenses with /add';
-
-			await reply(ctx, emptyMessage, { parse_mode: 'HTML' });
-			return;
-		}
-
-		// Use debt simplification for cleaner display
-		const { simplifyDebts } = await import('../utils/debt-simplification');
-		const simplifiedDebts = await simplifyDebts(db, groupId, filterTripId);
-		
-		// Format balances for display
-		let message = '💰 <b>Current Balances</b>';
-		if (tripInfo) {
-			message += ` - ${tripInfo.name}`;
-		}
-		message += '\n\n';
-		
-		if (simplifiedDebts.length === 0) {
-			// If simplification returns no debts but we have balances, show raw balances
-			// This shouldn't happen but is a fallback
-			let totalUnsettled = 0;
-			for (const balance of balances.results) {
-				const user1Name = balance.user1_username || balance.user1_first_name || 'User';
-				const user2Name = balance.user2_username || balance.user2_first_name || 'User';
-				const amount = Math.abs(balance.net_amount);
-				totalUnsettled += amount;
-
-				if (balance.net_amount > 0) {
-					message += `@${user2Name} owes @${user1Name}: <b>$${amount.toFixed(2)}</b>\n`;
-				} else {
-					message += `@${user1Name} owes @${user2Name}: <b>$${amount.toFixed(2)}</b>\n`;
-				}
-			}
-			message += `\n💵 Total unsettled: <b>$${totalUnsettled.toFixed(2)}</b>`;
-		} else {
-			// Show simplified debts
-			let totalAmount = 0;
-			for (const debt of simplifiedDebts) {
-				const { fromName, toName, amount } = debt;
-				message += `@${fromName || 'User'} owes @${toName || 'User'}: <b>$${amount.toFixed(2)}</b>\n`;
-				totalAmount += amount;
-			}
-			message += `\n💵 Total to settle: <b>$${totalAmount.toFixed(2)}</b>`;
-			message += '\n\n💡 <i>Showing simplified payments</i>';
-		}
-
-		// Add settle button
-		const buttons = [];
-		if (balances.results.length > 0) {
-			buttons.push([
-				{ text: '💸 Settle Up', callback_data: 'show_settle_balances' }
-			]);
-		}
-		buttons.push([{ text: '📊 View History', callback_data: 'view_history' }]);
-
-		await reply(ctx, message, {
-			parse_mode: 'HTML',
-			reply_markup: {
-				inline_keyboard: buttons,
-			},
-		});
-	} catch (error) {
-		console.error('Error calculating balances:', error);
-		await reply(ctx, '❌ Error calculating balances. Please try again.');
-	}
-}
-
-// New function for personal expense balance
-async function handlePersonalBalance(ctx: Context, db: D1Database, userId: string) {
-	try {
-		// Get total personal expenses (money out)
-		const expenses = await db.prepare(`
-			SELECT 
-				SUM(amount) as total_spent,
-				COUNT(*) as expense_count,
-				MAX(created_at) as last_expense
-			FROM expenses
-			WHERE paid_by = ? AND is_personal = TRUE AND deleted = FALSE
-		`).bind(userId).first();
-
-		// Get personal expenses by category
-		const byCategory = await db.prepare(`
-			SELECT 
-				COALESCE(category, 'Uncategorized') as category,
-				SUM(amount) as total,
-				COUNT(*) as count
-			FROM expenses
-			WHERE paid_by = ? AND is_personal = TRUE AND deleted = FALSE
-			GROUP BY category
-			ORDER BY total DESC
-		`).bind(userId).all();
-
-		// Get monthly totals for the last 3 months
-		const monthlyTotals = await db.prepare(`
-			SELECT 
-				strftime('%Y-%m', created_at) as month,
-				SUM(amount) as total
-			FROM expenses
-			WHERE paid_by = ? AND is_personal = TRUE AND deleted = FALSE
-				AND created_at >= datetime('now', '-3 months')
-			GROUP BY month
-			ORDER BY month DESC
-		`).bind(userId).all();
-
-		let message = '💰 <b>Personal Expense Balance</b>\n\n';
-
-		if (!expenses || expenses.expense_count === 0) {
-			message += '🆕 No personal expenses tracked yet!\n\n';
-			message += 'Start tracking with:\n';
-			message += '<code>/add [amount] [description]</code>';
-		} else {
-			const totalSpent = expenses.total_spent as number || 0;
-			const expenseCount = expenses.expense_count as number || 0;
-			const avgExpense = totalSpent / expenseCount;
-
-			message += `💸 <b>Total Spent:</b> $${totalSpent.toFixed(2)}\n`;
-			message += `📋 <b>Total Expenses:</b> ${expenseCount}\n`;
-			message += `📊 <b>Average Expense:</b> $${avgExpense.toFixed(2)}\n\n`;
-
-			if (monthlyTotals.results.length > 0) {
-				message += '📅 <b>Monthly Breakdown:</b>\n';
-				for (const month of monthlyTotals.results) {
-					const monthDate = new Date(month.month + '-01');
-					const monthName = monthDate.toLocaleDateString('en-US', { month: 'short', year: 'numeric' });
-					message += `  • ${monthName}: $${(month.total as number).toFixed(2)}\n`;
-				}
-				message += '\n';
-			}
-
-			if (byCategory.results.length > 0) {
-				message += '📂 <b>By Category:</b>\n';
-				for (const cat of byCategory.results) {
-					const percentage = ((cat.total as number / totalSpent) * 100).toFixed(1);
-					message += `  • ${cat.category}: $${(cat.total as number).toFixed(2)} (${percentage}%)\n`;
-				}
-			}
-		}
-
-		await reply(ctx, message, {
-			parse_mode: 'HTML',
-			reply_markup: {
-				inline_keyboard: [
-					[{ text: '📊 View Expenses', callback_data: 'view_personal_expenses' }],
-					[{ text: '📊 Monthly Summary', callback_data: 'personal_monthly' }],
-					[{ text: '💵 Add Expense', callback_data: 'add_expense_help' }],
-				],
-			},
-		});
-	} catch (error) {
-		console.error('Error calculating personal balance:', error);
-		await reply(ctx, '❌ Error calculating personal balance. Please try again.');
-	}
+    return suggestions;
 }

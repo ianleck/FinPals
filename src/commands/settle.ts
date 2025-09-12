@@ -1,8 +1,11 @@
 import { Context } from 'grammy';
+import { eq, and, sql, or, inArray } from 'drizzle-orm';
+import { type Database, withRetry, formatAmount, parseDecimal } from '../db';
+import { users, groups, groupMembers, expenses, expenseSplits, settlements } from '../db/schema';
 import { ERROR_MESSAGES } from '../utils/constants';
 import { reply } from '../utils/reply';
 
-export async function handleSettle(ctx: Context, db: D1Database) {
+export async function handleSettle(ctx: Context, db: Database) {
 	// Only work in group chats
 	if (ctx.chat?.type === 'private') {
 		await reply(ctx, '⚠️ This command only works in group chats. Add me to a group first!');
@@ -57,18 +60,28 @@ export async function handleSettle(ctx: Context, db: D1Database) {
 	}
 
 	try {
-		// TODO: In a real implementation, we'd resolve the @mention to get the user ID
-		// For now, we'll show a message that we need the user to have interacted with the bot
-		
 		// Check if we have any balance with mentioned users in the group
-		const groupMembers = await db.prepare(`
-			SELECT u.telegram_id, u.username, u.first_name
-			FROM users u
-			JOIN group_members gm ON u.telegram_id = gm.user_id
-			WHERE gm.group_id = ? AND gm.active = TRUE AND u.username = ?
-		`).bind(groupId, mention.substring(1)).first();
+		const groupMember = await withRetry(async () => {
+			const result = await db
+				.select({
+					telegramId: users.telegramId,
+					username: users.username,
+					firstName: users.firstName
+				})
+				.from(users)
+				.innerJoin(groupMembers, eq(users.telegramId, groupMembers.userId))
+				.where(
+					and(
+						eq(groupMembers.groupId, groupId),
+						eq(groupMembers.active, true),
+						eq(users.username, mention.substring(1))
+					)
+				)
+				.limit(1);
+			return result[0];
+		});
 
-		if (!groupMembers) {
+		if (!groupMember) {
 			await reply(ctx, 
 				`❌ User ${mention} not found in this group.\n\n` +
 				'Make sure they have used the bot at least once.',
@@ -77,56 +90,22 @@ export async function handleSettle(ctx: Context, db: D1Database) {
 			return;
 		}
 
-		const toUserId = groupMembers.telegram_id as string;
-		const toUsername = groupMembers.username || groupMembers.first_name || 'User';
+		const toUserId = groupMember.telegramId;
+		const toUsername = groupMember.username || groupMember.firstName || 'User';
 
-		// Check current balance between users
-		const currentBalance = await db.prepare(`
-			WITH expense_balances AS (
-				SELECT 
-					e.paid_by as creditor,
-					es.user_id as debtor,
-					SUM(es.amount) as amount
-				FROM expenses e
-				JOIN expense_splits es ON e.id = es.expense_id
-				WHERE e.group_id = ? AND e.deleted = FALSE
-					AND ((e.paid_by = ? AND es.user_id = ?) OR (e.paid_by = ? AND es.user_id = ?))
-				GROUP BY e.paid_by, es.user_id
-			),
-			settlement_balances AS (
-				SELECT 
-					to_user as creditor,
-					from_user as debtor,
-					SUM(amount) as amount
-				FROM settlements
-				WHERE group_id = ?
-					AND ((to_user = ? AND from_user = ?) OR (to_user = ? AND from_user = ?))
-				GROUP BY to_user, from_user
-			)
-			SELECT 
-				SUM(CASE 
-					WHEN creditor = ? AND debtor = ? THEN amount
-					WHEN creditor = ? AND debtor = ? THEN -amount
-					ELSE 0
-				END) as net_balance
-			FROM (
-				SELECT creditor, debtor, amount FROM expense_balances
-				UNION ALL
-				SELECT creditor, debtor, -amount FROM settlement_balances
-			)
-		`).bind(
-			groupId, fromUserId, toUserId, toUserId, fromUserId,
-			groupId, fromUserId, toUserId, toUserId, fromUserId,
-			fromUserId, toUserId, toUserId, fromUserId
-		).first();
-
-		const netBalance = currentBalance?.net_balance as number || 0;
+		// Calculate current balance between users
+		const netBalance = await calculateNetBalance(db, groupId, fromUserId, toUserId);
 
 		// Create settlement
-		const settlementId = crypto.randomUUID();
-		await db.prepare(
-			'INSERT INTO settlements (id, group_id, from_user, to_user, amount, created_by) VALUES (?, ?, ?, ?, ?, ?)'
-		).bind(settlementId, groupId, fromUserId, toUserId, amount, fromUserId).run();
+		await withRetry(async () => {
+			await db.insert(settlements).values({
+				groupId: groupId,
+				fromUser: fromUserId,
+				toUser: toUserId,
+				amount: formatAmount(amount),
+				createdBy: fromUserId
+			});
+		});
 
 		// Calculate new balance
 		const newBalance = netBalance - amount;
@@ -169,12 +148,88 @@ export async function handleSettle(ctx: Context, db: D1Database) {
 			// User might have blocked the bot
 		}
 	} catch (error) {
-		// Error recording settlement
 		await reply(ctx, ERROR_MESSAGES.DATABASE_ERROR);
 	}
 }
 
-export async function showUnsettledBalances(ctx: Context, db: D1Database) {
+async function calculateNetBalance(
+	db: Database, 
+	groupId: string, 
+	userId1: string, 
+	userId2: string
+): Promise<number> {
+	return await withRetry(async () => {
+		// Get expenses where user1 paid and user2 owes
+		const user1PaidExpenses = await db
+			.select({
+				amount: sql<string>`SUM(${expenseSplits.amount})`
+			})
+			.from(expenses)
+			.innerJoin(expenseSplits, eq(expenses.id, expenseSplits.expenseId))
+			.where(
+				and(
+					eq(expenses.groupId, groupId),
+					eq(expenses.deleted, false),
+					eq(expenses.paidBy, userId1),
+					eq(expenseSplits.userId, userId2)
+				)
+			);
+
+		// Get expenses where user2 paid and user1 owes
+		const user2PaidExpenses = await db
+			.select({
+				amount: sql<string>`SUM(${expenseSplits.amount})`
+			})
+			.from(expenses)
+			.innerJoin(expenseSplits, eq(expenses.id, expenseSplits.expenseId))
+			.where(
+				and(
+					eq(expenses.groupId, groupId),
+					eq(expenses.deleted, false),
+					eq(expenses.paidBy, userId2),
+					eq(expenseSplits.userId, userId1)
+				)
+			);
+
+		// Get settlements from user1 to user2
+		const user1ToUser2Settlements = await db
+			.select({
+				amount: sql<string>`SUM(${settlements.amount})`
+			})
+			.from(settlements)
+			.where(
+				and(
+					eq(settlements.groupId, groupId),
+					eq(settlements.fromUser, userId1),
+					eq(settlements.toUser, userId2)
+				)
+			);
+
+		// Get settlements from user2 to user1
+		const user2ToUser1Settlements = await db
+			.select({
+				amount: sql<string>`SUM(${settlements.amount})`
+			})
+			.from(settlements)
+			.where(
+				and(
+					eq(settlements.groupId, groupId),
+					eq(settlements.fromUser, userId2),
+					eq(settlements.toUser, userId1)
+				)
+			);
+
+		const user1Paid = parseDecimal(user1PaidExpenses[0]?.amount || '0');
+		const user2Paid = parseDecimal(user2PaidExpenses[0]?.amount || '0');
+		const user1Settled = parseDecimal(user1ToUser2Settlements[0]?.amount || '0');
+		const user2Settled = parseDecimal(user2ToUser1Settlements[0]?.amount || '0');
+
+		// Net balance: positive means user2 owes user1, negative means user1 owes user2
+		return (user1Paid - user1Settled) - (user2Paid - user2Settled);
+	});
+}
+
+export async function showUnsettledBalances(ctx: Context, db: Database) {
 	const groupId = ctx.chat!.id.toString();
 
 	try {
@@ -223,7 +278,7 @@ export async function showUnsettledBalances(ctx: Context, db: D1Database) {
 	}
 }
 
-export async function handleSettleCallback(ctx: Context, db: D1Database) {
+export async function handleSettleCallback(ctx: Context, db: Database) {
 	if (!ctx.callbackQuery?.data) return;
 	const parts = ctx.callbackQuery.data.split('_');
 	const owerId = parts[1];
@@ -252,23 +307,33 @@ export async function handleSettleCallback(ctx: Context, db: D1Database) {
 	if (!groupId) return;
 	
 	// Get usernames for the settlement
-	const users = await db.prepare(`
-		SELECT telegram_id, username, first_name
-		FROM users
-		WHERE telegram_id IN (?, ?)
-	`).bind(owerId, owedId).all();
+	const userDetails = await withRetry(async () => {
+		return await db
+			.select({
+				telegramId: users.telegramId,
+				username: users.username,
+				firstName: users.firstName
+			})
+			.from(users)
+			.where(inArray(users.telegramId, [owerId, owedId]));
+	});
 	
-	const owerUser = users.results.find(u => u.telegram_id === owerId);
-	const owedUser = users.results.find(u => u.telegram_id === owedId);
+	const owerUser = userDetails.find(u => u.telegramId === owerId);
+	const owedUser = userDetails.find(u => u.telegramId === owedId);
 	
-	const owerName = owerUser?.username || owerUser?.first_name || 'User';
-	const owedName = owedUser?.username || owedUser?.first_name || 'User';
+	const owerName = owerUser?.username || owerUser?.firstName || 'User';
+	const owedName = owedUser?.username || owedUser?.firstName || 'User';
 	
 	// Record the settlement
-	const settlementId = crypto.randomUUID();
-	await db.prepare(
-		'INSERT INTO settlements (id, group_id, from_user, to_user, amount, created_by) VALUES (?, ?, ?, ?, ?, ?)'
-	).bind(settlementId, groupId, owerId, owedId, amount, currentUserId).run();
+	await withRetry(async () => {
+		await db.insert(settlements).values({
+			groupId: groupId,
+			fromUser: owerId,
+			toUser: owedId,
+			amount: formatAmount(amount),
+			createdBy: currentUserId
+		});
+	});
 	
 	// Update the message based on who is settling
 	let settlementMessage: string;
@@ -314,7 +379,7 @@ export async function handleSettleCallback(ctx: Context, db: D1Database) {
 
 async function handlePartialSettlement(
 	ctx: Context, 
-	db: D1Database, 
+	db: Database, 
 	mention: string, 
 	groupId: string, 
 	fromUserId: string, 
@@ -322,14 +387,27 @@ async function handlePartialSettlement(
 ) {
 	try {
 		// Get the mentioned user
-		const groupMembers = await db.prepare(`
-			SELECT u.telegram_id, u.username, u.first_name
-			FROM users u
-			JOIN group_members gm ON u.telegram_id = gm.user_id
-			WHERE gm.group_id = ? AND gm.active = TRUE AND u.username = ?
-		`).bind(groupId, mention.substring(1)).first();
+		const groupMember = await withRetry(async () => {
+			const result = await db
+				.select({
+					telegramId: users.telegramId,
+					username: users.username,
+					firstName: users.firstName
+				})
+				.from(users)
+				.innerJoin(groupMembers, eq(users.telegramId, groupMembers.userId))
+				.where(
+					and(
+						eq(groupMembers.groupId, groupId),
+						eq(groupMembers.active, true),
+						eq(users.username, mention.substring(1))
+					)
+				)
+				.limit(1);
+			return result[0];
+		});
 
-		if (!groupMembers) {
+		if (!groupMember) {
 			await reply(ctx, 
 				`❌ User ${mention} not found in this group.\n\n` +
 				'Make sure they have used the bot at least once.',
@@ -338,50 +416,11 @@ async function handlePartialSettlement(
 			return;
 		}
 
-		const toUserId = groupMembers.telegram_id as string;
-		const toUsername = groupMembers.username || groupMembers.first_name || 'User';
+		const toUserId = groupMember.telegramId;
+		const toUsername = groupMember.username || groupMember.firstName || 'User';
 
 		// Get current balance
-		const currentBalance = await db.prepare(`
-			WITH expense_balances AS (
-				SELECT 
-					e.paid_by as creditor,
-					es.user_id as debtor,
-					SUM(es.amount) as amount
-				FROM expenses e
-				JOIN expense_splits es ON e.id = es.expense_id
-				WHERE e.group_id = ? AND e.deleted = FALSE
-					AND ((e.paid_by = ? AND es.user_id = ?) OR (e.paid_by = ? AND es.user_id = ?))
-				GROUP BY e.paid_by, es.user_id
-			),
-			settlement_balances AS (
-				SELECT 
-					to_user as creditor,
-					from_user as debtor,
-					SUM(amount) as amount
-				FROM settlements
-				WHERE group_id = ?
-					AND ((to_user = ? AND from_user = ?) OR (to_user = ? AND from_user = ?))
-				GROUP BY to_user, from_user
-			)
-			SELECT 
-				SUM(CASE 
-					WHEN creditor = ? AND debtor = ? THEN amount
-					WHEN creditor = ? AND debtor = ? THEN -amount
-					ELSE 0
-				END) as net_balance
-			FROM (
-				SELECT creditor, debtor, amount FROM expense_balances
-				UNION ALL
-				SELECT creditor, debtor, -amount FROM settlement_balances
-			)
-		`).bind(
-			groupId, fromUserId, toUserId, toUserId, fromUserId,
-			groupId, fromUserId, toUserId, toUserId, fromUserId,
-			fromUserId, toUserId, toUserId, fromUserId
-		).first();
-
-		const netBalance = currentBalance?.net_balance as number || 0;
+		const netBalance = await calculateNetBalance(db, groupId, fromUserId, toUserId);
 
 		if (Math.abs(netBalance) < 0.01) {
 			await reply(ctx, `✅ You're already settled up with @${toUsername}!`);
@@ -438,7 +477,7 @@ async function handlePartialSettlement(
 
 async function handlePartialSettlementCallback(
 	ctx: Context,
-	db: D1Database,
+	db: Database,
 	owerId: string,
 	owedId: string,
 	totalAmount: number
@@ -447,17 +486,22 @@ async function handlePartialSettlementCallback(
 	const commonAmounts = [10, 20, 25, 50, 100];
 	
 	// Get usernames
-	const users = await db.prepare(`
-		SELECT telegram_id, username, first_name
-		FROM users
-		WHERE telegram_id IN (?, ?)
-	`).bind(owerId, owedId).all();
+	const userDetails = await withRetry(async () => {
+		return await db
+			.select({
+				telegramId: users.telegramId,
+				username: users.username,
+				firstName: users.firstName
+			})
+			.from(users)
+			.where(inArray(users.telegramId, [owerId, owedId]));
+	});
 	
-	const owerUser = users.results.find(u => u.telegram_id === owerId);
-	const owedUser = users.results.find(u => u.telegram_id === owedId);
+	const owerUser = userDetails.find(u => u.telegramId === owerId);
+	const owedUser = userDetails.find(u => u.telegramId === owedId);
 	
-	const owerName = owerUser?.username || owerUser?.first_name || 'User';
-	const owedName = owedUser?.username || owedUser?.first_name || 'User';
+	const owerName = owerUser?.username || owerUser?.firstName || 'User';
+	const owedName = owedUser?.username || owedUser?.firstName || 'User';
 	
 	// Add quick amount buttons
 	for (const amt of commonAmounts) {

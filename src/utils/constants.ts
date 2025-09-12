@@ -69,6 +69,7 @@ export const COMMANDS = {
 	FRIEND: 'friend',
 	INFO: 'info',
 	FIX_DUPLICATES: 'fixduplicates',
+	SEARCH: 'search',
 };
 
 export const ERROR_MESSAGES = {

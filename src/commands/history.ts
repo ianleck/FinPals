@@ -1,6 +1,9 @@
 import { Context } from 'grammy';
+import { eq, and, desc, sql, or } from 'drizzle-orm';
+import { type Database, withRetry, parseDecimal } from '../db';
+import { expenses, settlements, users, expenseSplits } from '../db/schema';
 
-export async function handleHistory(ctx: Context, db: D1Database) {
+export async function handleHistory(ctx: Context, db: Database) {
 	const isPersonal = ctx.chat?.type === 'private';
 	const userId = ctx.from?.id.toString();
 	
@@ -13,49 +16,90 @@ export async function handleHistory(ctx: Context, db: D1Database) {
 	const groupId = ctx.chat!.id.toString();
 
 	try {
-		// Get recent transactions (expenses and settlements)
-		const recentTransactions = await db.prepare(`
-			SELECT * FROM (
-				SELECT 
-					'expense' as type,
-					e.id,
-					e.amount,
-					e.currency,
-					e.description,
-					e.category,
-					e.created_at,
-					u.username as user_username,
-					u.first_name as user_first_name,
-					NULL as to_username,
-					NULL as to_first_name
-				FROM expenses e
-				JOIN users u ON e.paid_by = u.telegram_id
-				WHERE e.group_id = ? AND e.deleted = FALSE
-				
-				UNION ALL
-				
-				SELECT 
-					'settlement' as type,
-					s.id,
-					s.amount,
-					s.currency,
-					'Settlement' as description,
-					NULL as category,
-					s.created_at,
-					u1.username as user_username,
-					u1.first_name as user_first_name,
-					u2.username as to_username,
-					u2.first_name as to_first_name
-				FROM settlements s
-				JOIN users u1 ON s.from_user = u1.telegram_id
-				JOIN users u2 ON s.to_user = u2.telegram_id
-				WHERE s.group_id = ?
-			) as transactions
-			ORDER BY created_at DESC
-			LIMIT 20
-		`).bind(groupId, groupId).all();
+		// Get recent expenses
+		const recentExpenses = await withRetry(async () => {
+			return await db
+				.select({
+					type: sql<string>`'expense'`,
+					id: expenses.id,
+					amount: expenses.amount,
+					currency: expenses.currency,
+					description: expenses.description,
+					category: expenses.category,
+					createdAt: expenses.createdAt,
+					userUsername: users.username,
+					userFirstName: users.firstName
+				})
+				.from(expenses)
+				.innerJoin(users, eq(expenses.paidBy, users.telegramId))
+				.where(
+					and(
+						eq(expenses.groupId, groupId),
+						eq(expenses.deleted, false)
+					)
+				)
+				.orderBy(desc(expenses.createdAt))
+				.limit(20);
+		});
 
-		if (!recentTransactions.results || recentTransactions.results.length === 0) {
+		// Get recent settlements
+		const recentSettlements = await withRetry(async () => {
+			return await db
+				.select({
+					type: sql<string>`'settlement'`,
+					id: settlements.id,
+					amount: settlements.amount,
+					currency: sql<string>`'USD'`,
+					description: sql<string>`'Settlement'`,
+					category: sql<string>`NULL`,
+					createdAt: settlements.createdAt,
+					fromUsername: users.username,
+					fromFirstName: users.firstName,
+					toUserId: settlements.toUser
+				})
+				.from(settlements)
+				.innerJoin(users, eq(settlements.fromUser, users.telegramId))
+				.where(eq(settlements.groupId, groupId))
+				.orderBy(desc(settlements.createdAt))
+				.limit(20);
+		});
+
+		// Get usernames for settlement recipients
+		const toUserIds = recentSettlements.map(s => s.toUserId);
+		const toUsers = toUserIds.length > 0 ? await withRetry(async () => {
+			return await db
+				.select({
+					telegramId: users.telegramId,
+					username: users.username,
+					firstName: users.firstName
+				})
+				.from(users)
+				.where(sql`${users.telegramId} IN ${toUserIds}`);
+		}) : [];
+
+		const toUserMap = new Map(toUsers.map(u => [u.telegramId, u]));
+
+		// Combine and sort transactions
+		const allTransactions = [
+			...recentExpenses.map(e => ({
+				...e,
+				toUsername: null as string | null,
+				toFirstName: null as string | null
+			})),
+			...recentSettlements.map(s => {
+				const toUser = toUserMap.get(s.toUserId);
+				return {
+					...s,
+					userUsername: s.fromUsername,
+					userFirstName: s.fromFirstName,
+					toUsername: toUser?.username || null,
+					toFirstName: toUser?.firstName || null
+				};
+			})
+		].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+		.slice(0, 20);
+
+		if (allTransactions.length === 0) {
 			await ctx.reply(
 				'📭 <b>No Transaction History</b>\n\n' +
 				'No expenses or settlements recorded yet.\n\n' +
@@ -68,24 +112,29 @@ export async function handleHistory(ctx: Context, db: D1Database) {
 		// Format transactions
 		let message = '📜 <b>Recent Transactions</b>\n\n';
 
-		for (const tx of recentTransactions.results) {
-			const date = new Date(tx.created_at as string).toLocaleDateString();
-			const userName = tx.user_username || tx.user_first_name || 'Unknown';
+		for (const tx of allTransactions) {
+			const date = new Date(tx.createdAt).toLocaleDateString();
+			const userName = tx.userUsername || tx.userFirstName || 'Unknown';
+			const amount = parseDecimal(tx.amount);
 
 			if (tx.type === 'expense') {
-				// Get split info for expense
-				const splits = await db.prepare(
-					'SELECT COUNT(*) as count FROM expense_splits WHERE expense_id = ?'
-				).bind(tx.id).first();
+				// Get split count for expense
+				const splits = await withRetry(async () => {
+					const result = await db
+						.select({ count: sql<number>`COUNT(*)::int` })
+						.from(expenseSplits)
+						.where(eq(expenseSplits.expenseId, tx.id));
+					return result[0];
+				});
 				const splitCount = splits?.count || 1;
 
 				message += `💵 <b>${date}</b> - ${tx.description}\n`;
-				message += `   $${(tx.amount as number).toFixed(2)} by @${userName} (${splitCount} people)\n\n`;
+				message += `   $${amount.toFixed(2)} by @${userName} (${splitCount} people)\n\n`;
 			} else {
 				// Settlement
-				const toUserName = tx.to_username || tx.to_first_name || 'Unknown';
+				const toUserName = tx.toUsername || tx.toFirstName || 'Unknown';
 				message += `💰 <b>${date}</b>\n`;
-				message += `   @${userName} → @${toUserName}: $${(tx.amount as number).toFixed(2)}\n\n`;
+				message += `   @${userName} → @${toUserName}: $${amount.toFixed(2)}\n\n`;
 			}
 		}
 
@@ -105,24 +154,32 @@ export async function handleHistory(ctx: Context, db: D1Database) {
 }
 
 // Handle personal transaction history
-async function handlePersonalHistory(ctx: Context, db: D1Database, userId: string) {
+async function handlePersonalHistory(ctx: Context, db: Database, userId: string) {
 	try {
 		// Get recent personal expenses
-		const recentTransactions = await db.prepare(`
-			SELECT 
-				e.id,
-				e.amount,
-				e.currency,
-				e.description,
-				e.category,
-				e.created_at
-			FROM expenses e
-			WHERE e.paid_by = ? AND e.is_personal = TRUE AND e.deleted = FALSE
-			ORDER BY e.created_at DESC
-			LIMIT 20
-		`).bind(userId).all();
+		const recentTransactions = await withRetry(async () => {
+			return await db
+				.select({
+					id: expenses.id,
+					amount: expenses.amount,
+					currency: expenses.currency,
+					description: expenses.description,
+					category: expenses.category,
+					createdAt: expenses.createdAt
+				})
+				.from(expenses)
+				.where(
+					and(
+						eq(expenses.paidBy, userId),
+						eq(expenses.isPersonal, true),
+						eq(expenses.deleted, false)
+					)
+				)
+				.orderBy(desc(expenses.createdAt))
+				.limit(20);
+		});
 
-		if (!recentTransactions.results || recentTransactions.results.length === 0) {
+		if (recentTransactions.length === 0) {
 			await ctx.reply(
 				'📭 <b>No Transaction History</b>\n\n' +
 				'Start tracking personal expenses with:\n' +
@@ -134,12 +191,13 @@ async function handlePersonalHistory(ctx: Context, db: D1Database, userId: strin
 
 		let message = '📜 <b>Personal Transaction History</b>\n\n';
 		
-		for (const tx of recentTransactions.results) {
-			const date = new Date(tx.created_at as string).toLocaleDateString();
+		for (const tx of recentTransactions) {
+			const date = new Date(tx.createdAt).toLocaleDateString();
 			const category = tx.category ? `[${tx.category}]` : '';
+			const amount = parseDecimal(tx.amount);
 			
 			message += `💵 <b>${date}</b> - ${tx.description} ${category}\n`;
-			message += `   $${(tx.amount as number).toFixed(2)}\n\n`;
+			message += `   $${amount.toFixed(2)}\n\n`;
 		}
 
 		await ctx.reply(message, {

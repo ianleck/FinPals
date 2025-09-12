@@ -1,9 +1,12 @@
 import { Context } from 'grammy';
+import { eq, and, sql } from 'drizzle-orm';
+import { type Database, withRetry, formatAmount, parseDecimal } from '../db';
+import { expenses, expenseSplits, users, groupMembers } from '../db/schema';
 import { reply } from '../utils/reply';
 import { formatCurrency } from '../utils/currency';
 import { parseEnhancedSplits } from '../utils/split-parser';
 
-export async function handleEdit(ctx: Context, db: D1Database) {
+export async function handleEdit(ctx: Context, db: Database) {
     const message = ctx.message?.text || '';
     const args = message.split(' ').filter(s => s.length > 0).slice(1);
     
@@ -39,15 +42,33 @@ export async function handleEdit(ctx: Context, db: D1Database) {
     
     try {
         // Get expense details
-        const expense = await db.prepare(`
-            SELECT 
-                e.*,
-                u.username as payer_username,
-                u.first_name as payer_first_name
-            FROM expenses e
-            JOIN users u ON e.paid_by = u.telegram_id
-            WHERE e.id = ? AND e.deleted = FALSE
-        `).bind(expenseId).first();
+        const expense = await withRetry(async () => {
+            const result = await db
+                .select({
+                    id: expenses.id,
+                    amount: expenses.amount,
+                    currency: expenses.currency,
+                    description: expenses.description,
+                    category: expenses.category,
+                    notes: expenses.notes,
+                    paidBy: expenses.paidBy,
+                    createdBy: expenses.createdBy,
+                    groupId: expenses.groupId,
+                    isPersonal: expenses.isPersonal,
+                    payerUsername: users.username,
+                    payerFirstName: users.firstName
+                })
+                .from(expenses)
+                .innerJoin(users, eq(expenses.paidBy, users.telegramId))
+                .where(
+                    and(
+                        eq(expenses.id, expenseId),
+                        eq(expenses.deleted, false)
+                    )
+                )
+                .limit(1);
+            return result[0];
+        });
         
         if (!expense) {
             await reply(ctx, '❌ Expense not found');
@@ -55,23 +76,24 @@ export async function handleEdit(ctx: Context, db: D1Database) {
         }
         
         // Check permissions - only creator or payer can edit
-        if (expense.created_by !== userId && expense.paid_by !== userId) {
+        if (expense.createdBy !== userId && expense.paidBy !== userId) {
             await reply(ctx, '❌ Only the expense creator or payer can edit it');
             return;
         }
         
         // Ensure it's from the right group/personal context
         const isPersonal = ctx.chat?.type === 'private';
-        if (isPersonal && !expense.is_personal) {
+        if (isPersonal && !expense.isPersonal) {
             await reply(ctx, '❌ This is a group expense. Edit it in the group.');
             return;
         }
-        if (!isPersonal && expense.group_id !== groupId) {
+        if (!isPersonal && expense.groupId !== groupId) {
             await reply(ctx, '❌ This expense belongs to a different group');
             return;
         }
         
         let updateMessage = '';
+        const currentAmount = parseDecimal(expense.amount);
         
         switch (field.toLowerCase()) {
             case 'amount': {
@@ -81,23 +103,41 @@ export async function handleEdit(ctx: Context, db: D1Database) {
                     return;
                 }
                 
-                await db.prepare('UPDATE expenses SET amount = ? WHERE id = ?')
-                    .bind(newAmount, expenseId)
-                    .run();
+                await withRetry(async () => {
+                    await db
+                        .update(expenses)
+                        .set({ amount: formatAmount(newAmount) })
+                        .where(eq(expenses.id, expenseId));
+                });
                 
                 // If not personal, update splits proportionally
-                if (!expense.is_personal) {
-                    const oldAmount = expense.amount as number;
-                    const ratio = newAmount / oldAmount;
+                if (!expense.isPersonal) {
+                    const ratio = newAmount / currentAmount;
                     
-                    await db.prepare(`
-                        UPDATE expense_splits 
-                        SET amount = amount * ? 
-                        WHERE expense_id = ?
-                    `).bind(ratio, expenseId).run();
+                    await withRetry(async () => {
+                        // Get existing splits
+                        const splits = await db
+                            .select({
+                                id: expenseSplits.id,
+                                amount: expenseSplits.amount
+                            })
+                            .from(expenseSplits)
+                            .where(eq(expenseSplits.expenseId, expenseId));
+                        
+                        // Update each split
+                        for (const split of splits) {
+                            const oldSplitAmount = parseDecimal(split.amount);
+                            const newSplitAmount = oldSplitAmount * ratio;
+                            
+                            await db
+                                .update(expenseSplits)
+                                .set({ amount: formatAmount(newSplitAmount) })
+                                .where(eq(expenseSplits.id, split.id));
+                        }
+                    });
                 }
                 
-                updateMessage = `✅ Amount updated from ${formatCurrency(expense.amount as number, expense.currency as string)} to ${formatCurrency(newAmount, expense.currency as string)}`;
+                updateMessage = `✅ Amount updated from ${formatCurrency(currentAmount, expense.currency)} to ${formatCurrency(newAmount, expense.currency)}`;
                 break;
             }
             
@@ -108,9 +148,12 @@ export async function handleEdit(ctx: Context, db: D1Database) {
                     return;
                 }
                 
-                await db.prepare('UPDATE expenses SET description = ? WHERE id = ?')
-                    .bind(newDescription, expenseId)
-                    .run();
+                await withRetry(async () => {
+                    await db
+                        .update(expenses)
+                        .set({ description: newDescription })
+                        .where(eq(expenses.id, expenseId));
+                });
                 
                 updateMessage = `✅ Description updated to "${newDescription}"`;
                 break;
@@ -132,16 +175,35 @@ export async function handleEdit(ctx: Context, db: D1Database) {
                     return;
                 }
                 
-                await db.prepare('UPDATE expenses SET category = ? WHERE id = ?')
-                    .bind(newCategory, expenseId)
-                    .run();
+                await withRetry(async () => {
+                    await db
+                        .update(expenses)
+                        .set({ category: newCategory })
+                        .where(eq(expenses.id, expenseId));
+                });
                 
                 updateMessage = `✅ Category updated to "${newCategory}"`;
                 break;
             }
             
+            case 'notes': {
+                const newNote = value.trim();
+                
+                await withRetry(async () => {
+                    await db
+                        .update(expenses)
+                        .set({ notes: newNote || null })
+                        .where(eq(expenses.id, expenseId));
+                });
+                
+                updateMessage = newNote 
+                    ? `✅ Note updated to "${newNote}"`
+                    : `✅ Note removed`;
+                break;
+            }
+            
             case 'splits': {
-                if (expense.is_personal) {
+                if (expense.isPersonal) {
                     await reply(ctx, '❌ Cannot change splits for personal expenses');
                     return;
                 }
@@ -155,67 +217,68 @@ export async function handleEdit(ctx: Context, db: D1Database) {
                 
                 let parsedSplits;
                 try {
-                    parsedSplits = parseEnhancedSplits(splitArgs, expense.amount as number);
+                    parsedSplits = parseEnhancedSplits(splitArgs, currentAmount);
                 } catch (error: any) {
                     await reply(ctx, `❌ ${error.message}`);
                     return;
                 }
                 
-                // Delete old splits
-                await db.prepare('DELETE FROM expense_splits WHERE expense_id = ?')
-                    .bind(expenseId)
-                    .run();
-                
-                // Add new splits
-                const { splits } = parsedSplits;
-                const splitEntries: Array<{userId: string, amount: number}> = [];
-                
-                for (const [mention, splitInfo] of splits) {
-                    // Resolve username to user ID
-                    const username = mention.substring(1);
-                    const user = await db.prepare(
-                        'SELECT telegram_id FROM users WHERE username = ?'
-                    ).bind(username).first();
+                await withRetry(async () => {
+                    // Delete old splits
+                    await db
+                        .delete(expenseSplits)
+                        .where(eq(expenseSplits.expenseId, expenseId));
                     
-                    if (user) {
-                        splitEntries.push({
-                            userId: user.telegram_id as string,
-                            amount: splitInfo.value
-                        });
-                    }
-                }
-                
-                // Insert new splits
-                if (splitEntries.length > 0) {
-                    const values = splitEntries.map(() => '(?, ?, ?)').join(',');
-                    const bindings: any[] = [];
+                    // Add new splits
+                    const { splits } = parsedSplits;
+                    const splitEntries: Array<{userId: string, amount: number}> = [];
                     
-                    for (const split of splitEntries) {
-                        bindings.push(expenseId, split.userId, split.amount);
+                    for (const [mention, splitInfo] of splits) {
+                        // Resolve username to user ID
+                        const username = mention.substring(1);
+                        const user = await db
+                            .select({ telegramId: users.telegramId })
+                            .from(users)
+                            .where(eq(users.username, username))
+                            .limit(1);
+                        
+                        if (user[0]) {
+                            splitEntries.push({
+                                userId: user[0].telegramId,
+                                amount: splitInfo.value
+                            });
+                        }
                     }
                     
-                    await db.prepare(
-                        `INSERT INTO expense_splits (expense_id, user_id, amount) VALUES ${values}`
-                    ).bind(...bindings).run();
-                }
-                
-                updateMessage = `✅ Splits updated for ${splitEntries.length} participants`;
+                    // Insert new splits
+                    if (splitEntries.length > 0) {
+                        await db.insert(expenseSplits).values(
+                            splitEntries.map(split => ({
+                                expenseId: expenseId,
+                                userId: split.userId,
+                                amount: formatAmount(split.amount)
+                            }))
+                        );
+                    }
+                    
+                    updateMessage = `✅ Splits updated for ${splitEntries.length} participants`;
+                });
                 break;
             }
             
             default:
-                await reply(ctx, '❌ Invalid field. Use: amount, description, category, or splits');
+                await reply(ctx, '❌ Invalid field. Use: amount, description, category, notes, or splits');
                 return;
         }
         
         // Show update confirmation
-        const payerName = expense.payer_username || expense.payer_first_name || 'Unknown';
+        const payerName = expense.payerUsername || expense.payerFirstName || 'Unknown';
         await reply(ctx,
             `${updateMessage}\n\n` +
             `📝 <b>Expense Details:</b>\n` +
             `ID: <code>${expenseId}</code>\n` +
             `Description: ${expense.description}\n` +
-            `Amount: ${formatCurrency(expense.amount as number, expense.currency as string)}\n` +
+            `Amount: ${formatCurrency(currentAmount, expense.currency)}\n` +
             `Paid by: @${payerName}\n` +
             `Category: ${expense.category || 'Uncategorized'}`,
             { 
@@ -239,32 +302,46 @@ export async function handleEdit(ctx: Context, db: D1Database) {
 }
 
 // Handle edit callbacks from expense list
-export async function handleEditCallback(ctx: Context, db: D1Database, expenseId: string) {
+export async function handleEditCallback(ctx: Context, db: Database, expenseId: string) {
     await ctx.answerCallbackQuery();
     
     try {
-        const expense = await db.prepare(`
-            SELECT 
-                e.*,
-                u.username as payer_username,
-                u.first_name as payer_first_name
-            FROM expenses e
-            JOIN users u ON e.paid_by = u.telegram_id
-            WHERE e.id = ? AND e.deleted = FALSE
-        `).bind(expenseId).first();
+        const expense = await withRetry(async () => {
+            const result = await db
+                .select({
+                    id: expenses.id,
+                    amount: expenses.amount,
+                    currency: expenses.currency,
+                    description: expenses.description,
+                    category: expenses.category,
+                    payerUsername: users.username,
+                    payerFirstName: users.firstName
+                })
+                .from(expenses)
+                .innerJoin(users, eq(expenses.paidBy, users.telegramId))
+                .where(
+                    and(
+                        eq(expenses.id, expenseId),
+                        eq(expenses.deleted, false)
+                    )
+                )
+                .limit(1);
+            return result[0];
+        });
         
         if (!expense) {
             await ctx.reply('❌ Expense not found');
             return;
         }
         
-        const payerName = expense.payer_username || expense.payer_first_name || 'Unknown';
+        const payerName = expense.payerUsername || expense.payerFirstName || 'Unknown';
+        const amount = parseDecimal(expense.amount);
         
         await ctx.reply(
             `✏️ <b>Edit Expense</b>\n\n` +
             `ID: <code>${expenseId}</code>\n` +
             `Description: ${expense.description}\n` +
-            `Amount: ${formatCurrency(expense.amount as number, expense.currency as string)}\n` +
+            `Amount: ${formatCurrency(amount, expense.currency)}\n` +
             `Paid by: @${payerName}\n` +
             `Category: ${expense.category || 'Uncategorized'}\n\n` +
             `To edit, use:\n` +

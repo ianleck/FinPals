@@ -39,11 +39,18 @@ bindings = [
 tag = "0001_session_do"
 new_sqlite_classes = ["SessionDO"]
 
-# D1 Database binding
-[[d1_databases]]
-binding = "DB"
-database_name = "finpals-db"
-database_id = "897f6b1e-e788-43c8-bc9a-0b499727716c"  # Replace with your database ID from dashboard
+# Hyperdrive configuration for CockroachDB
+[[hyperdrive]]
+binding = "HYPERDRIVE"
+id = "7d0cebc7c9394008a9cfdbd3e2aea5c4"
+# For local development, set HYPERDRIVE_LOCAL_CONNECTION_STRING in .dev.vars
+# localConnectionString will be loaded from environment
+
+# D1 Database binding (kept for backward compatibility during migration)
+# [[d1_databases]]
+# binding = "DB"
+# database_name = "finpals-db"
+# database_id = "897f6b1e-e788-43c8-bc9a-0b499727716c"  # Replace with your database ID from dashboard
 
 
 # Production environment
@@ -59,10 +66,14 @@ bindings = [
 tag = "0001_session_do"
 new_sqlite_classes = ["SessionDO"]
 
-[[env.production.d1_databases]]
-binding = "DB"
-database_name = "finpals-db"
-database_id = "897f6b1e-e788-43c8-bc9a-0b499727716c"
+[[env.production.hyperdrive]]
+binding = "HYPERDRIVE"
+id = "YOUR_HYPERDRIVE_ID"  # Replace with production Hyperdrive ID
+
+# [[env.production.d1_databases]]
+# binding = "DB"
+# database_name = "finpals-db"
+# database_id = "897f6b1e-e788-43c8-bc9a-0b499727716c"
 
 # Test environment
 [env.test]

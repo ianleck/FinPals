@@ -23,7 +23,12 @@
       "mcp__sequential-thinking__sequentialthinking",
       "Bash(git --no-pager diff)",
       "Bash(git --no-pager diff --cached)",
-      "Bash(git --no-pager diff src/commands/add.ts)"
+      "Bash(git --no-pager diff src/commands/add.ts)",
+      "Bash(npx wrangler d1 execute:*)",
+      "Bash(git --no-pager diff --stat)",
+      "Bash(git --no-pager diff src/commands/add.ts src/commands/edit.ts src/commands/expenses.ts)",
+      "Bash(git --no-pager diff src/index.ts)",
+      "WebFetch(domain:developers.cloudflare.com)"
     ],
     "deny": []
   },
@@ -33,5 +38,6 @@
   ],
   "disabledMcpjsonServers": [
     "zen"
-  ]
+  ],
+  "outputStyle": "default"
 }

@@ -1,7 +1,10 @@
 import { Context } from 'grammy';
+import { eq, and, sql, desc, isNull } from 'drizzle-orm';
+import { type Database, withRetry, parseDecimal } from '../db';
+import { expenses, expenseSplits, settlements, users } from '../db/schema';
 import { generateSpendingTrends, formatTrendsMessage } from '../utils/spending-visualization';
 
-export async function handleStats(ctx: Context, db: D1Database) {
+export async function handleStats(ctx: Context, db: Database) {
 	// Only work in group chats
 	if (ctx.chat?.type === 'private') {
 		await ctx.reply('⚠️ This command only works in group chats. Add me to a group first!');
@@ -12,58 +15,104 @@ export async function handleStats(ctx: Context, db: D1Database) {
 	const groupName = ctx.chat!.title || 'This Group';
 
 	try {
-		// Get various statistics
-		const stats = await db.prepare(`
-			SELECT 
-				COUNT(DISTINCT e.id) as total_expenses,
-				SUM(e.amount) as total_amount,
-				COUNT(DISTINCT e.paid_by) as active_payers,
-				COUNT(DISTINCT es.user_id) as active_participants,
-				COUNT(DISTINCT DATE(e.created_at)) as active_days,
-				MIN(e.created_at) as first_expense_date
-			FROM expenses e
-			JOIN expense_splits es ON e.id = es.expense_id
-			WHERE e.group_id = ? AND e.deleted = FALSE
-		`).bind(groupId).first();
+		// Get overview statistics
+		const overview = await withRetry(async () => {
+			const result = await db
+				.select({
+					totalExpenses: sql<number>`COUNT(DISTINCT ${expenses.id})::int`,
+					totalAmount: sql<string>`SUM(${expenses.amount})`,
+					activePayers: sql<number>`COUNT(DISTINCT ${expenses.paidBy})::int`,
+					activeDays: sql<number>`COUNT(DISTINCT DATE(${expenses.createdAt}))::int`,
+					firstExpenseDate: sql<Date>`MIN(${expenses.createdAt})`
+				})
+				.from(expenses)
+				.where(
+					and(
+						eq(expenses.groupId, groupId),
+						eq(expenses.deleted, false)
+					)
+				);
+			return result[0];
+		});
 
-		const settlements = await db.prepare(`
-			SELECT 
-				COUNT(*) as total_settlements,
-				SUM(amount) as total_settled
-			FROM settlements
-			WHERE group_id = ?
-		`).bind(groupId).first();
+		// Get active participants count
+		const participants = await withRetry(async () => {
+			const result = await db
+				.select({
+					activeParticipants: sql<number>`COUNT(DISTINCT ${expenseSplits.userId})::int`
+				})
+				.from(expenseSplits)
+				.innerJoin(expenses, eq(expenseSplits.expenseId, expenses.id))
+				.where(
+					and(
+						eq(expenses.groupId, groupId),
+						eq(expenses.deleted, false)
+					)
+				);
+			return result[0];
+		});
 
-		const topSpender = await db.prepare(`
-			SELECT 
-				u.username,
-				u.first_name,
-				SUM(e.amount) as total_paid
-			FROM expenses e
-			JOIN users u ON e.paid_by = u.telegram_id
-			WHERE e.group_id = ? AND e.deleted = FALSE
-			GROUP BY e.paid_by
-			ORDER BY total_paid DESC
-			LIMIT 1
-		`).bind(groupId).first();
+		// Get settlement statistics
+		const settlementStats = await withRetry(async () => {
+			const result = await db
+				.select({
+					totalSettlements: sql<number>`COUNT(*)::int`,
+					totalSettled: sql<string>`SUM(${settlements.amount})`
+				})
+				.from(settlements)
+				.where(eq(settlements.groupId, groupId));
+			return result[0];
+		});
 
-		const categoryBreakdown = await db.prepare(`
-			SELECT 
-				COALESCE(category, 'Other') as category,
-				COUNT(*) as count,
-				SUM(amount) as total
-			FROM expenses
-			WHERE group_id = ? AND deleted = FALSE
-			GROUP BY category
-			ORDER BY total DESC
-			LIMIT 5
-		`).bind(groupId).all();
+		// Get top spender
+		const topSpender = await withRetry(async () => {
+			const result = await db
+				.select({
+					username: users.username,
+					firstName: users.firstName,
+					totalPaid: sql<string>`SUM(${expenses.amount})`
+				})
+				.from(expenses)
+				.innerJoin(users, eq(expenses.paidBy, users.telegramId))
+				.where(
+					and(
+						eq(expenses.groupId, groupId),
+						eq(expenses.deleted, false)
+					)
+				)
+				.groupBy(expenses.paidBy, users.username, users.firstName)
+				.orderBy(desc(sql`SUM(${expenses.amount})`))
+				.limit(1);
+			return result[0];
+		});
+
+		// Get category breakdown
+		const categoryBreakdown = await withRetry(async () => {
+			return await db
+				.select({
+					category: sql<string>`COALESCE(${expenses.category}, 'Other')`,
+					count: sql<number>`COUNT(*)::int`,
+					total: sql<string>`SUM(${expenses.amount})`
+				})
+				.from(expenses)
+				.where(
+					and(
+						eq(expenses.groupId, groupId),
+						eq(expenses.deleted, false)
+					)
+				)
+				.groupBy(expenses.category)
+				.orderBy(desc(sql`SUM(${expenses.amount})`))
+				.limit(5);
+		});
 
 		// Format the statistics message
-		const totalExpenses = stats?.total_expenses || 0;
-		const totalAmount = Number(stats?.total_amount) || 0;
-		const totalSettled = Number(settlements?.total_settled) || 0;
-		const firstDate = stats?.first_expense_date ? new Date(stats.first_expense_date as string).toLocaleDateString() : 'N/A';
+		const totalExpenses = overview?.totalExpenses || 0;
+		const totalAmount = parseDecimal(overview?.totalAmount || '0');
+		const totalSettled = parseDecimal(settlementStats?.totalSettled || '0');
+		const firstDate = overview?.firstExpenseDate 
+			? new Date(overview.firstExpenseDate).toLocaleDateString() 
+			: 'N/A';
 
 		let message = `📊 <b>Statistics for ${groupName}</b>\n\n`;
 		
@@ -75,24 +124,26 @@ export async function handleStats(ctx: Context, db: D1Database) {
 			message += `💵 Total Amount: $${totalAmount.toFixed(2)}\n`;
 			message += `💸 Total Settled: $${totalSettled.toFixed(2)}\n`;
 			message += `📅 Tracking Since: ${firstDate}\n`;
-			message += `👥 Active Members: ${stats?.active_participants || 0}\n\n`;
+			message += `👥 Active Members: ${participants?.activeParticipants || 0}\n\n`;
 
 			if (topSpender) {
-				const spenderName = topSpender.username || topSpender.first_name || 'Unknown';
+				const spenderName = topSpender.username || topSpender.firstName || 'Unknown';
+				const topAmount = parseDecimal(topSpender.totalPaid);
 				message += `<b>Top Spender:</b>\n`;
-				message += `🏆 @${spenderName} - $${(topSpender.total_paid as number).toFixed(2)}\n\n`;
+				message += `🏆 @${spenderName} - $${topAmount.toFixed(2)}\n\n`;
 			}
 
-			if (categoryBreakdown.results.length > 0) {
+			if (categoryBreakdown.length > 0) {
 				message += `<b>Top Categories:</b>\n`;
-				for (const cat of categoryBreakdown.results) {
-					message += `${cat.category}: $${(cat.total as number).toFixed(2)} (${cat.count}x)\n`;
+				for (const cat of categoryBreakdown) {
+					const catTotal = parseDecimal(cat.total);
+					message += `${cat.category}: $${catTotal.toFixed(2)} (${cat.count}x)\n`;
 				}
 			}
 		}
 
-		// Send initial stats message
-		const statsMsg = await ctx.reply(message, {
+		// Send stats message
+		await ctx.reply(message, {
 			parse_mode: 'HTML',
 			reply_markup: {
 				inline_keyboard: [
@@ -103,7 +154,6 @@ export async function handleStats(ctx: Context, db: D1Database) {
 			}
 		});
 	} catch (error) {
-		console.error('Error getting stats:', error);
 		await ctx.reply('❌ Error getting statistics. Please try again.');
 	}
 }

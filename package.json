@@ -13,6 +13,8 @@
 	"devDependencies": {
 		"@cloudflare/vitest-pool-workers": "^0.5.2",
 		"@types/node": "^22.10.5",
+		"@types/pg": "^8.15.5",
+		"drizzle-kit": "^0.31.4",
 		"typescript": "^5.5.2",
 		"vitest": "2.0.5",
 		"vitest-environment-miniflare": "^2.14.4",
@@ -20,6 +22,8 @@
 	},
 	"dependencies": {
 		"date-fns": "^4.1.0",
-		"grammy": "^1.32.0"
+		"drizzle-orm": "^0.44.5",
+		"grammy": "^1.32.0",
+		"postgres": "^3.4.7"
 	}
 }

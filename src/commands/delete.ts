@@ -1,7 +1,10 @@
 import { Context } from 'grammy';
+import { eq, and, desc } from 'drizzle-orm';
+import { type Database, withRetry, parseDecimal } from '../db';
+import { expenses, users } from '../db/schema';
 import { ERROR_MESSAGES } from '../utils/constants';
 
-export async function handleDelete(ctx: Context, db: D1Database) {
+export async function handleDelete(ctx: Context, db: Database) {
 	// Only work in group chats
 	if (ctx.chat?.type === 'private') {
 		await ctx.reply('⚠️ This command only works in group chats. Add me to a group first!');
@@ -17,24 +20,31 @@ export async function handleDelete(ctx: Context, db: D1Database) {
 	if (args.length === 0) {
 		try {
 			// Get recent expenses
-			const recentExpenses = await db.prepare(`
-				SELECT 
-					e.id,
-					e.description,
-					e.amount,
-					e.created_by,
-					e.currency,
-					e.created_at,
-					u.username,
-					u.first_name
-				FROM expenses e
-				JOIN users u ON e.created_by = u.telegram_id
-				WHERE e.group_id = ? AND e.deleted = FALSE
-				ORDER BY e.created_at DESC
-				LIMIT 10
-			`).bind(groupId).all();
+			const recentExpenses = await withRetry(async () => {
+				return await db
+					.select({
+						id: expenses.id,
+						description: expenses.description,
+						amount: expenses.amount,
+						createdBy: expenses.createdBy,
+						currency: expenses.currency,
+						createdAt: expenses.createdAt,
+						username: users.username,
+						firstName: users.firstName
+					})
+					.from(expenses)
+					.innerJoin(users, eq(expenses.createdBy, users.telegramId))
+					.where(
+						and(
+							eq(expenses.groupId, groupId),
+							eq(expenses.deleted, false)
+						)
+					)
+					.orderBy(desc(expenses.createdAt))
+					.limit(10);
+			});
 
-			if (!recentExpenses.results || recentExpenses.results.length === 0) {
+			if (!recentExpenses || recentExpenses.length === 0) {
 				await ctx.reply('📭 No expenses found in this group.');
 				return;
 			}
@@ -52,14 +62,15 @@ export async function handleDelete(ctx: Context, db: D1Database) {
 			let message = '🗑️ <b>Select an expense to delete:</b>\n\n';
 			const buttons: any[][] = [];
 			
-			recentExpenses.results.forEach((expense: any) => {
-				const creatorName = expense.username ? `@${expense.username}` : expense.first_name || 'Unknown';
-				const date = new Date(expense.created_at).toLocaleDateString();
-				const canDelete = expense.created_by === userId || isAdmin;
+			recentExpenses.forEach((expense) => {
+				const creatorName = expense.username ? `@${expense.username}` : expense.firstName || 'Unknown';
+				const date = new Date(expense.createdAt).toLocaleDateString();
+				const canDelete = expense.createdBy === userId || isAdmin;
 				const deleteIcon = canDelete ? ' ✅' : '';
+				const amount = parseDecimal(expense.amount);
 				
 				message += `<code>${expense.id}</code> - ${expense.description}\n`;
-				message += `   💰 ${expense.currency}${expense.amount.toFixed(2)} by ${creatorName}${deleteIcon}\n`;
+				message += `   💰 ${expense.currency}${amount.toFixed(2)} by ${creatorName}${deleteIcon}\n`;
 				message += `   📅 ${date}\n\n`;
 				
 				// Add delete button if user can delete this expense
@@ -94,18 +105,28 @@ export async function handleDelete(ctx: Context, db: D1Database) {
 
 	try {
 		// Check if expense exists and user has permission to delete
-		const expense = await db.prepare(`
-			SELECT 
-				e.id, 
-				e.description, 
-				e.amount,
-				e.created_by,
-				u.username,
-				u.first_name
-			FROM expenses e
-			JOIN users u ON e.created_by = u.telegram_id
-			WHERE e.id = ? AND e.group_id = ? AND e.deleted = FALSE
-		`).bind(expenseId, groupId).first();
+		const expense = await withRetry(async () => {
+			const result = await db
+				.select({
+					id: expenses.id,
+					description: expenses.description,
+					amount: expenses.amount,
+					createdBy: expenses.createdBy,
+					username: users.username,
+					firstName: users.firstName
+				})
+				.from(expenses)
+				.innerJoin(users, eq(expenses.createdBy, users.telegramId))
+				.where(
+					and(
+						eq(expenses.id, expenseId),
+						eq(expenses.groupId, groupId),
+						eq(expenses.deleted, false)
+					)
+				)
+				.limit(1);
+			return result[0];
+		});
 
 		if (!expense) {
 			await ctx.reply('❌ Expense not found or already deleted.');
@@ -113,7 +134,7 @@ export async function handleDelete(ctx: Context, db: D1Database) {
 		}
 
 		// Only allow creator or admins to delete
-		const isCreator = expense.created_by === userId;
+		const isCreator = expense.createdBy === userId;
 		let isAdmin = false;
 
 		try {
@@ -124,7 +145,7 @@ export async function handleDelete(ctx: Context, db: D1Database) {
 		}
 
 		if (!isCreator && !isAdmin) {
-			const creatorName = expense.username || expense.first_name || 'Unknown';
+			const creatorName = expense.username || expense.firstName || 'Unknown';
 			await ctx.reply(
 				`❌ Only @${creatorName} (who created this expense) or group admins can delete it.`
 			);
@@ -132,13 +153,17 @@ export async function handleDelete(ctx: Context, db: D1Database) {
 		}
 
 		// Soft delete the expense
-		await db.prepare(
-			'UPDATE expenses SET deleted = TRUE WHERE id = ?'
-		).bind(expenseId).run();
+		await withRetry(async () => {
+			await db
+				.update(expenses)
+				.set({ deleted: true })
+				.where(eq(expenses.id, expenseId));
+		});
 
+		const amount = parseDecimal(expense.amount);
 		await ctx.reply(
 			`✅ <b>Expense Deleted</b>\n\n` +
-			`"${expense.description}" - $${(expense.amount as number).toFixed(2)}\n\n` +
+			`"${expense.description}" - $${amount.toFixed(2)}\n\n` +
 			`The balances have been updated.`,
 			{
 				parse_mode: 'HTML',

@@ -205,16 +205,16 @@ async function handlePersonalActivity(ctx: Context, db: D1Database, userId: stri
 		let message = '📊 <b>Your Recent Activity</b>\n\n';
 		
 		for (const activity of activities.results) {
-			const createdAt = new Date(activity.created_at);
+			const createdAt = new Date(activity.created_at as string);
 			const timeStr = format(createdAt, 'MMM d');
 			
 			if (activity.type === 'expense') {
-				const icon = getExpenseIcon(activity.category);
+				const icon = getExpenseIcon(activity.category as string | undefined);
 				const location = activity.is_personal ? '(Personal)' : `(${activity.group_name || 'Group'})`;
 				
-				message += `${icon} <b>${formatCurrency(activity.amount, 'USD')}</b> - ${activity.description || 'Expense'} ${location}\n`;
+				message += `${icon} <b>${formatCurrency(activity.amount as number, 'USD')}</b> - ${activity.description || 'Expense'} ${location}\n`;
 				if (!activity.is_personal && activity.user_share) {
-					message += `   Your share: ${formatCurrency(activity.user_share, 'USD')} • ${timeStr}\n\n`;
+					message += `   Your share: ${formatCurrency(activity.user_share as number, 'USD')} • ${timeStr}\n\n`;
 				} else {
 					message += `   ${timeStr}\n\n`;
 				}
@@ -226,7 +226,7 @@ async function handlePersonalActivity(ctx: Context, db: D1Database, userId: stri
 					`@${activity.to_username || 'User'}` : 
 					`@${activity.from_username || 'User'}`;
 				
-				message += `💰 <b>${formatCurrency(activity.amount, 'USD')}</b> ${direction} ${otherUser} ${location}\n`;
+				message += `💰 <b>${formatCurrency(activity.amount as number, 'USD')}</b> ${direction} ${otherUser} ${location}\n`;
 				message += `   ${timeStr}\n\n`;
 			}
 		}

@@ -123,6 +123,7 @@ ${templateShortcuts}
 /${COMMANDS.SUMMARY} <code>[month]</code> - Monthly summary
 /${COMMANDS.ACTIVITY} - Recent activity feed
 /${COMMANDS.FRIEND} <code>@user</code> - View shared expenses with a friend
+/${COMMANDS.SEARCH} <code>[query]</code> - Search expenses
 /${COMMANDS.EXPORT} - Export to CSV
 
 <b>👥 Group Management:</b>

@@ -40,9 +40,9 @@ export async function processRecurringExpenses(db: D1Database, bot: Bot<any>): P
 				).run();
 				
 				// Create splits based on participants
+				let participantIds: string[] = [];
+				
 				if (!recurring.is_personal) {
-					let participantIds: string[] = [];
-					
 					if (recurring.participants === 'all') {
 						// Get all active group members
 						const members = await db.prepare(`
