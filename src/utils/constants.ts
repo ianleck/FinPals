@@ -78,4 +78,5 @@ export const ERROR_MESSAGES = {
 	USER_NOT_IN_GROUP: 'Please add the user to the group first',
 	DATABASE_ERROR: 'Something went wrong. Please try again.',
 	RATE_LIMITED: 'Too many requests. Please wait a moment.',
+	GENERIC: 'An error occurred. Please try again.',
 };

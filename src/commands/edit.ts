@@ -118,7 +118,7 @@ export async function handleEdit(ctx: Context, db: Database) {
                         // Get existing splits
                         const splits = await db
                             .select({
-                                id: expenseSplits.id,
+                                userId: expenseSplits.userId,
                                 amount: expenseSplits.amount
                             })
                             .from(expenseSplits)
@@ -132,12 +132,15 @@ export async function handleEdit(ctx: Context, db: Database) {
                             await db
                                 .update(expenseSplits)
                                 .set({ amount: formatAmount(newSplitAmount) })
-                                .where(eq(expenseSplits.id, split.id));
+                                .where(and(
+                                    eq(expenseSplits.expenseId, expenseId),
+                                    eq(expenseSplits.userId, split.userId)
+                                ));
                         }
                     });
                 }
                 
-                updateMessage = `✅ Amount updated from ${formatCurrency(currentAmount, expense.currency)} to ${formatCurrency(newAmount, expense.currency)}`;
+                updateMessage = `✅ Amount updated from ${formatCurrency(currentAmount, expense.currency || 'USD')} to ${formatCurrency(newAmount, expense.currency || 'USD')}`;
                 break;
             }
             
@@ -277,8 +280,8 @@ export async function handleEdit(ctx: Context, db: Database) {
             `${updateMessage}\n\n` +
             `📝 <b>Expense Details:</b>\n` +
             `ID: <code>${expenseId}</code>\n` +
-            `Description: ${expense.description}\n` +
-            `Amount: ${formatCurrency(currentAmount, expense.currency)}\n` +
+            `Description: ${expense.description || 'No description'}\n` +
+            `Amount: ${formatCurrency(currentAmount, expense.currency || 'USD')}\n` +
             `Paid by: @${payerName}\n` +
             `Category: ${expense.category || 'Uncategorized'}`,
             { 
@@ -340,8 +343,8 @@ export async function handleEditCallback(ctx: Context, db: Database, expenseId: 
         await ctx.reply(
             `✏️ <b>Edit Expense</b>\n\n` +
             `ID: <code>${expenseId}</code>\n` +
-            `Description: ${expense.description}\n` +
-            `Amount: ${formatCurrency(amount, expense.currency)}\n` +
+            `Description: ${expense.description || 'No description'}\n` +
+            `Amount: ${formatCurrency(amount, expense.currency || 'USD')}\n` +
             `Paid by: @${payerName}\n` +
             `Category: ${expense.category || 'Uncategorized'}\n\n` +
             `To edit, use:\n` +

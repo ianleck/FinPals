@@ -1,4 +1,6 @@
-import type { D1Database } from '@cloudflare/workers-types';
+import type { Database } from '../db';
+import { sql } from 'drizzle-orm';
+import { toResultArray } from './db-helpers';
 
 interface Balance {
     userId: string;
@@ -19,7 +21,7 @@ interface Transaction {
  * Uses a greedy algorithm to match creditors and debtors
  */
 export async function simplifyDebts(
-    db: D1Database,
+    db: Database,
     groupId: string,
     tripId?: string
 ): Promise<Transaction[]> {
@@ -77,15 +79,12 @@ export async function simplifyDebts(
  * Calculate net balances for all users in a group
  */
 async function calculateNetBalances(
-    db: D1Database,
+    db: Database,
     groupId: string,
     tripId?: string
 ): Promise<Balance[]> {
-    const tripFilter = tripId ? 'AND e.trip_id = ?' : '';
-    const tripParams = tripId ? [tripId] : [];
-    
     // Get all expenses and settlements
-    const query = `
+    const result = await db.execute(sql`
         WITH expense_balances AS (
             -- Money paid by each user
             SELECT 
@@ -95,9 +94,9 @@ async function calculateNetBalances(
                 0 as settlement_paid,
                 0 as settlement_received
             FROM expenses e
-            WHERE e.group_id = ? 
+            WHERE e.group_id = ${groupId} 
                 AND e.deleted = FALSE
-                ${tripFilter}
+                ${tripId ? sql`AND e.trip_id = ${tripId}` : sql``}
             GROUP BY e.paid_by
             
             UNION ALL
@@ -111,9 +110,9 @@ async function calculateNetBalances(
                 0 as settlement_received
             FROM expense_splits es
             JOIN expenses e ON es.expense_id = e.id
-            WHERE e.group_id = ? 
+            WHERE e.group_id = ${groupId} 
                 AND e.deleted = FALSE
-                ${tripFilter}
+                ${tripId ? sql`AND e.trip_id = ${tripId}` : sql``}
             GROUP BY es.user_id
         ),
         settlement_balances AS (
@@ -125,8 +124,8 @@ async function calculateNetBalances(
                 -SUM(s.amount) as settlement_paid,
                 0 as settlement_received
             FROM settlements s
-            WHERE s.group_id = ?
-                ${tripFilter}
+            WHERE s.group_id = ${groupId}
+                ${tripId ? sql`AND s.trip_id = ${tripId}` : sql``}
             GROUP BY s.from_user
             
             UNION ALL
@@ -139,8 +138,8 @@ async function calculateNetBalances(
                 0 as settlement_paid,
                 SUM(s.amount) as settlement_received
             FROM settlements s
-            WHERE s.group_id = ?
-                ${tripFilter}
+            WHERE s.group_id = ${groupId}
+                ${tripId ? sql`AND s.trip_id = ${tripId}` : sql``}
             GROUP BY s.to_user
         ),
         net_balances AS (
@@ -169,12 +168,10 @@ async function calculateNetBalances(
         WHERE ABS((COALESCE(nb.total_paid, 0) + COALESCE(nb.total_settlement_paid, 0)) - 
                   (COALESCE(nb.total_owed, 0) + COALESCE(nb.total_settlement_received, 0))) > 0.01
         ORDER BY net_balance DESC
-    `;
+    `);
     
-    const params = [groupId, ...tripParams, groupId, ...tripParams, groupId, ...tripParams, groupId, ...tripParams];
-    const result = await db.prepare(query).bind(...params).all();
     
-    return result.results.map((row: any) => ({
+    return toResultArray<any>(result).map((row: any) => ({
         userId: row.user_id,
         amount: row.net_balance,
         userName: row.username || row.first_name || 'Unknown'
@@ -185,7 +182,7 @@ async function calculateNetBalances(
  * Get simplified settlement plan as a formatted message
  */
 export async function getSimplifiedSettlementPlan(
-    db: D1Database,
+    db: Database,
     groupId: string,
     tripId?: string
 ): Promise<{ transactions: Transaction[], message: string }> {

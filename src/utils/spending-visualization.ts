@@ -1,5 +1,7 @@
-import type { D1Database } from '@cloudflare/workers-types';
+import type { Database } from '../db';
+import { sql } from 'drizzle-orm';
 import { formatCurrency } from './currency';
+import { toResultArray } from './db-helpers';
 
 interface SpendingTrend {
     period: string;
@@ -17,7 +19,7 @@ interface CategoryTrend {
 }
 
 export async function generateSpendingTrends(
-    db: D1Database,
+    db: Database,
     groupId: string,
     userId?: string,
     months: number = 3
@@ -42,40 +44,37 @@ export async function generateSpendingTrends(
     }
     
     // Single query to get all data
-    const query = userId
-        ? `SELECT 
-            strftime('%Y-%m', created_at) as month,
-            SUM(amount) as total,
-            category,
-            COUNT(*) as count
-           FROM expenses 
-           WHERE group_id = ? 
-             AND paid_by = ?
-             AND deleted = FALSE 
-             AND created_at >= ?
-           GROUP BY month, category`
-        : `SELECT 
-            strftime('%Y-%m', created_at) as month,
-            SUM(amount) as total,
-            category,
-            COUNT(*) as count
-           FROM expenses 
-           WHERE group_id = ? 
-             AND deleted = FALSE 
-             AND created_at >= ?
-           GROUP BY month, category`;
-    
     const oldestDate = dateRanges[dateRanges.length - 1].start;
-    const params = userId 
-        ? [groupId, userId, oldestDate.toISOString()]
-        : [groupId, oldestDate.toISOString()];
     
-    const result = await db.prepare(query).bind(...params).all();
+    const result = await db.execute(
+        userId
+            ? sql`SELECT 
+                strftime('%Y-%m', created_at) as month,
+                SUM(amount) as total,
+                category,
+                COUNT(*) as count
+               FROM expenses 
+               WHERE group_id = ${groupId} 
+                 AND paid_by = ${userId}
+                 AND deleted = FALSE 
+                 AND created_at >= ${oldestDate.toISOString()}
+               GROUP BY month, category`
+            : sql`SELECT 
+                strftime('%Y-%m', created_at) as month,
+                SUM(amount) as total,
+                category,
+                COUNT(*) as count
+               FROM expenses 
+               WHERE group_id = ${groupId} 
+                 AND deleted = FALSE 
+                 AND created_at >= ${oldestDate.toISOString()}
+               GROUP BY month, category`
+    );
     
     // Process results into monthly trends
     const monthlyData = new Map<string, { total: number; categories: { [key: string]: number } }>();
     
-    for (const row of result.results) {
+    for (const row of toResultArray<any>(result)) {
         const month = row.month as string;
         const category = row.category as string || 'Uncategorized';
         const amount = row.total as number;
@@ -119,7 +118,7 @@ export async function generateSpendingTrends(
 }
 
 async function generateCategoryTrends(
-    db: D1Database,
+    db: Database,
     groupId: string,
     userId?: string
 ): Promise<CategoryTrend[]> {
@@ -129,52 +128,44 @@ async function generateCategoryTrends(
     const lastMonthEnd = new Date(now.getFullYear(), now.getMonth(), 0);
     
     // Get current month data
-    const currentQuery = userId
-        ? `SELECT category, SUM(amount) as total
-           FROM expenses 
-           WHERE group_id = ? AND paid_by = ? AND deleted = FALSE 
-             AND created_at >= ?
-           GROUP BY category`
-        : `SELECT category, SUM(amount) as total
-           FROM expenses 
-           WHERE group_id = ? AND deleted = FALSE 
-             AND created_at >= ?
-           GROUP BY category`;
-    
-    const currentParams = userId 
-        ? [groupId, userId, thisMonthStart.toISOString()]
-        : [groupId, thisMonthStart.toISOString()];
-    
-    const currentData = await db.prepare(currentQuery).bind(...currentParams).all();
+    const currentData = await db.execute(
+        userId
+            ? sql`SELECT category, SUM(amount) as total
+               FROM expenses 
+               WHERE group_id = ${groupId} AND paid_by = ${userId} AND deleted = FALSE 
+                 AND created_at >= ${thisMonthStart.toISOString()}
+               GROUP BY category`
+            : sql`SELECT category, SUM(amount) as total
+               FROM expenses 
+               WHERE group_id = ${groupId} AND deleted = FALSE 
+                 AND created_at >= ${thisMonthStart.toISOString()}
+               GROUP BY category`
+    );
     
     // Get last month data
-    const previousQuery = userId
-        ? `SELECT category, SUM(amount) as total
-           FROM expenses 
-           WHERE group_id = ? AND paid_by = ? AND deleted = FALSE 
-             AND created_at >= ? AND created_at <= ?
-           GROUP BY category`
-        : `SELECT category, SUM(amount) as total
-           FROM expenses 
-           WHERE group_id = ? AND deleted = FALSE 
-             AND created_at >= ? AND created_at <= ?
-           GROUP BY category`;
-    
-    const previousParams = userId
-        ? [groupId, userId, lastMonthStart.toISOString(), lastMonthEnd.toISOString()]
-        : [groupId, lastMonthStart.toISOString(), lastMonthEnd.toISOString()];
-    
-    const previousData = await db.prepare(previousQuery).bind(...previousParams).all();
+    const previousData = await db.execute(
+        userId
+            ? sql`SELECT category, SUM(amount) as total
+               FROM expenses 
+               WHERE group_id = ${groupId} AND paid_by = ${userId} AND deleted = FALSE 
+                 AND created_at >= ${lastMonthStart.toISOString()} AND created_at <= ${lastMonthEnd.toISOString()}
+               GROUP BY category`
+            : sql`SELECT category, SUM(amount) as total
+               FROM expenses 
+               WHERE group_id = ${groupId} AND deleted = FALSE 
+                 AND created_at >= ${lastMonthStart.toISOString()} AND created_at <= ${lastMonthEnd.toISOString()}
+               GROUP BY category`
+    );
     
     // Build maps
     const currentMap = new Map<string, number>();
     const previousMap = new Map<string, number>();
     
-    currentData.results.forEach(row => {
+    toResultArray<any>(currentData).forEach((row: any) => {
         currentMap.set(row.category as string || 'Uncategorized', row.total as number);
     });
     
-    previousData.results.forEach(row => {
+    toResultArray<any>(previousData).forEach((row: any) => {
         previousMap.set(row.category as string || 'Uncategorized', row.total as number);
     });
     

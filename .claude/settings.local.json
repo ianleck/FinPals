@@ -28,7 +28,10 @@
       "Bash(git --no-pager diff --stat)",
       "Bash(git --no-pager diff src/commands/add.ts src/commands/edit.ts src/commands/expenses.ts)",
       "Bash(git --no-pager diff src/index.ts)",
-      "WebFetch(domain:developers.cloudflare.com)"
+      "WebFetch(domain:developers.cloudflare.com)",
+      "Bash(npm test:*)",
+      "Bash(npm install:*)",
+      "Bash(xargs:*)"
     ],
     "deny": []
   },

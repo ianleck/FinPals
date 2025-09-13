@@ -330,22 +330,23 @@ export async function handleAdd(ctx: Context, db: Database) {
 
 		// Format success message
 		let message = '';
+		const currency = 'USD'; // TODO: Get from group or user settings
 		if (isPersonal) {
 			message = `✅ Personal expense added!\n\n` +
-				`💰 Amount: ${formatCurrency(amount)}\n` +
+				`💰 Amount: ${formatCurrency(amount, currency)}\n` +
 				`📝 Description: ${description}\n` +
 				`${note ? `📌 Note: ${note}\n` : ''}`;
 		} else {
 			const participantCount = result ? 1 : 0; // Simplified for now
 			message = `✅ Expense added successfully!\n\n` +
-				`💰 Amount: ${formatCurrency(amount)}\n` +
+				`💰 Amount: ${formatCurrency(amount, currency)}\n` +
 				`📝 Description: ${description}\n` +
 				`👥 Split between ${participantCount} people\n` +
 				`${note ? `📌 Note: ${note}\n` : ''}`;
 		}
 
 		// Create action buttons if expense was created
-		const buttons = result ? createExpenseActionButtons(result.id, 'expense') : undefined;
+		const buttons = result ? createExpenseActionButtons(result.id, isPersonal) : undefined;
 
 		await ctx.reply(message, {
 			parse_mode: 'HTML',

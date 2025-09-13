@@ -1,6 +1,10 @@
 // Currency conversion utilities
 // Supports both mock rates and real-time rates from exchangerate-api.com
 
+import { eq, gt, sql } from 'drizzle-orm';
+import type { Database } from '../db';
+import { users, exchangeRates } from '../db/schema';
+
 const MOCK_RATES: { [key: string]: number } = {
 	USD: 1,
 	EUR: 0.88, // Euro (as of Jan 2025)
@@ -39,7 +43,7 @@ let ratesCache: { rates: { [key: string]: number }; timestamp: number } | null =
 const CACHE_DURATION = 3600000; // 1 hour in milliseconds
 
 // Update exchange rates in database
-export async function updateExchangeRatesInDB(db: D1Database): Promise<boolean> {
+export async function updateExchangeRatesInDB(db: Database): Promise<boolean> {
 	try {
 		// Try to fetch from Frankfurter API (free, no key needed)
 		const response = await fetch('https://api.frankfurter.app/latest?from=USD');
@@ -58,12 +62,21 @@ export async function updateExchangeRatesInDB(db: D1Database): Promise<boolean> 
 
 		// Update all rates in database
 		const updatePromises = Object.entries(rates).map(([currency, rate]) =>
-			db
-				.prepare(
-					'INSERT OR REPLACE INTO exchange_rates (currency_code, rate_to_usd, source, last_updated) VALUES (?, ?, ?, CURRENT_TIMESTAMP)'
-				)
-				.bind(currency, rate as number, 'frankfurter')
-				.run()
+			db.insert(exchangeRates)
+				.values({
+					currencyCode: currency,
+					rateToUsd: rate.toString(),
+					source: 'frankfurter',
+					lastUpdated: new Date()
+				})
+				.onConflictDoUpdate({
+					target: exchangeRates.currencyCode,
+					set: {
+						rateToUsd: rate.toString(),
+						source: 'frankfurter',
+						lastUpdated: new Date()
+					}
+				})
 		);
 
 		await Promise.all(updatePromises);
@@ -76,19 +89,26 @@ export async function updateExchangeRatesInDB(db: D1Database): Promise<boolean> 
 }
 
 // Get exchange rates from database
-export async function getExchangeRatesFromDB(db: D1Database): Promise<{ [key: string]: number } | null> {
+export async function getExchangeRatesFromDB(db: Database): Promise<{ [key: string]: number } | null> {
 	try {
+		const oneDayAgo = new Date();
+		oneDayAgo.setHours(oneDayAgo.getHours() - 24);
+		
 		const results = await db
-			.prepare('SELECT currency_code, rate_to_usd FROM exchange_rates WHERE last_updated > datetime("now", "-24 hours")')
-			.all();
+			.select({
+				currencyCode: exchangeRates.currencyCode,
+				rateToUsd: exchangeRates.rateToUsd
+			})
+			.from(exchangeRates)
+			.where(gt(exchangeRates.lastUpdated, oneDayAgo));
 
-		if (!results.results || results.results.length === 0) {
+		if (!results || results.length === 0) {
 			return null;
 		}
 
 		const rates: { [key: string]: number } = {};
-		results.results.forEach((row: any) => {
-			rates[row.currency_code] = row.rate_to_usd;
+		results.forEach((row) => {
+			rates[row.currencyCode] = parseFloat(row.rateToUsd);
 		});
 
 		return rates;
@@ -214,7 +234,7 @@ async function fetchRealTimeRates(apiKey?: string): Promise<{ [key: string]: num
 	}
 }
 
-export async function convertCurrency(amount: number, from: string, to: string, db?: D1Database): Promise<number> {
+export async function convertCurrency(amount: number, from: string, to: string, db?: Database): Promise<number> {
 	// Try to get rates from database first
 	if (db) {
 		const dbRates = await getExchangeRatesFromDB(db);
@@ -235,7 +255,7 @@ export async function convertCurrency(amount: number, from: string, to: string, 
 let cachedRates: { [key: string]: number } | null = null;
 let cacheExpiry = 0;
 
-export async function refreshRatesCache(db: D1Database): Promise<void> {
+export async function refreshRatesCache(db: Database): Promise<void> {
 	const dbRates = await getExchangeRatesFromDB(db);
 	if (dbRates) {
 		cachedRates = dbRates;
@@ -324,12 +344,19 @@ export function parseCurrencyFromText(text: string): { amount: number; currency:
 }
 
 // Get user's preferred currency from database or default
-export async function getUserCurrency(db: D1Database, userId: string): Promise<string> {
-	const user = await db.prepare('SELECT preferred_currency FROM users WHERE telegram_id = ?').bind(userId).first();
-	return (user?.preferred_currency as string) || 'USD';
+export async function getUserCurrency(db: Database, userId: string): Promise<string> {
+	const user = await db
+		.select({ preferredCurrency: users.preferredCurrency })
+		.from(users)
+		.where(eq(users.telegramId, userId))
+		.limit(1);
+	return user[0]?.preferredCurrency || 'USD';
 }
 
 // Set user's preferred currency
-export async function setUserCurrency(db: D1Database, userId: string, currency: string): Promise<void> {
-	await db.prepare('UPDATE users SET preferred_currency = ? WHERE telegram_id = ?').bind(currency, userId).run();
+export async function setUserCurrency(db: Database, userId: string, currency: string): Promise<void> {
+	await db
+		.update(users)
+		.set({ preferredCurrency: currency })
+		.where(eq(users.telegramId, userId));
 }

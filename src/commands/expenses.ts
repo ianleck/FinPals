@@ -263,12 +263,13 @@ export async function handleExpenseSelection(ctx: Context, db: Database) {
 		detailMessage += `<b>Category:</b> ${category}\n`;
 		detailMessage += `<b>Date:</b> ${date}\n`;
 		
-		// Check for attached receipt
-		const { getExpenseReceipt } = await import('./receipt');
-		const receipt = await getExpenseReceipt(db, expense.id);
-		if (receipt) {
-			detailMessage += `<b>Receipt:</b> 📎 Attached\n`;
-		}
+		// Receipt functionality temporarily disabled
+		// const { getExpenseReceipt } = await import('./archive/receipt');
+		// const receipt = await getExpenseReceipt(db, expense.id);
+		// if (receipt) {
+		// 	detailMessage += `<b>Receipt:</b> 📎 Attached\n`;
+		// }
+		const receipt = false; // Placeholder for disabled receipt functionality
 		
 		detailMessage += `\nWhat would you like to do?`;
 

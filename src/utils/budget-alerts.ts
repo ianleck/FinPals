@@ -1,7 +1,9 @@
 import { Bot, Context } from 'grammy';
-import type { D1Database } from '@cloudflare/workers-types';
+import type { Database } from '../db';
+import { sql } from 'drizzle-orm';
 import { formatCurrency, convertCurrencySync, refreshRatesCache } from './currency';
 import { EXPENSE_CATEGORIES } from './constants';
+import { toResultArray, hasResults, getFirstResult } from './db-helpers';
 
 interface BudgetAlert {
     userId: string;
@@ -15,7 +17,7 @@ interface BudgetAlert {
 }
 
 export async function checkBudgetAlerts(
-    db: D1Database,
+    db: Database,
     userId: string,
     groupId?: string,
     newExpenseAmount?: number,
@@ -28,20 +30,20 @@ export async function checkBudgetAlerts(
     await refreshRatesCache(db);
     
     // Get user's budgets with currency info
-    const budgets = await db.prepare(`
+    const budgets = await db.execute(sql`
         SELECT b.*, COALESCE(b.currency, u.preferred_currency, 'USD') as currency
         FROM budgets b
         LEFT JOIN users u ON b.user_id = u.telegram_id
-        WHERE b.user_id = ? 
+        WHERE b.user_id = ${userId} 
         ORDER BY b.category
-    `).bind(userId).all();
+    `);
     
-    if (!budgets.results || budgets.results.length === 0) {
+    if (!hasResults(budgets)) {
         return alerts;
     }
     
     // Calculate current spending for each budget
-    for (const budget of budgets.results) {
+    for (const budget of toResultArray<any>(budgets)) {
         const category = budget.category as string;
         const limit = budget.amount as number;
         const period = budget.period as string;
@@ -70,15 +72,15 @@ export async function checkBudgetAlerts(
         const budgetCurrency = budget.currency as string;
         
         // Get spending in this category with currency info
-        let query = `
+        const expenses = await db.execute(sql`
             SELECT amount, currency
             FROM (
                 -- Personal expenses
                 SELECT amount, currency
                 FROM expenses 
-                WHERE paid_by = ? 
-                    AND category = ? 
-                    AND created_at >= ?
+                WHERE paid_by = ${userId} 
+                    AND category = ${category} 
+                    AND created_at >= ${startDate.toISOString()}
                     AND deleted = FALSE
                     AND is_personal = TRUE
                 
@@ -88,21 +90,17 @@ export async function checkBudgetAlerts(
                 SELECT es.amount, e.currency
                 FROM expense_splits es
                 JOIN expenses e ON e.id = es.expense_id
-                WHERE es.user_id = ? 
-                    AND e.category = ? 
-                    AND e.created_at >= ?
+                WHERE es.user_id = ${userId} 
+                    AND e.category = ${category} 
+                    AND e.created_at >= ${startDate.toISOString()}
                     AND e.deleted = FALSE
                     AND e.is_personal = FALSE
             )
-        `;
-        
-        const expenses = await db.prepare(query)
-            .bind(userId, category, startDate.toISOString(), userId, category, startDate.toISOString())
-            .all();
+        `);
         
         // Convert all expenses to budget currency and sum
         let currentSpent = 0;
-        for (const expense of expenses.results || []) {
+        for (const expense of toResultArray<any>(expenses)) {
             const amount = expense.amount as number;
             const currency = expense.currency as string || 'USD';
             currentSpent += currency === budgetCurrency 
@@ -194,7 +192,7 @@ export async function sendBudgetAlerts<T extends Context = Context>(
 
 // Check if we should send budget alerts for a user
 export async function shouldSendAlert(
-    db: D1Database,
+    db: Database,
     userId: string,
     category: string,
     alertLevel: number // 75, 90, or 100
@@ -204,38 +202,33 @@ export async function shouldSendAlert(
     const periodStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().split('T')[0];
     
     // Check if alert was already sent
-    const existing = await db.prepare(`
+    const existing = await db.execute(sql`
         SELECT COUNT(*) as count
         FROM budget_alerts_sent
-        WHERE user_id = ?
-            AND category = ?
-            AND alert_level = ?
-            AND period_start = ?
-    `).bind(userId, category, alertLevel, periodStart).first();
+        WHERE user_id = ${userId}
+            AND category = ${category}
+            AND alert_level = ${alertLevel}
+            AND period_start = ${periodStart}
+    `);
     
-    if ((existing?.count as number) > 0) {
+    const firstRow = getFirstResult<any>(existing);
+    if ((firstRow?.count as number) > 0) {
         return false;
     }
     
     // Record that we're sending this alert
-    await db.prepare(`
+    await db.execute(sql`
         INSERT OR IGNORE INTO budget_alerts_sent 
         (id, user_id, category, alert_level, period_start)
-        VALUES (?, ?, ?, ?, ?)
-    `).bind(
-        crypto.randomUUID(),
-        userId,
-        category,
-        alertLevel,
-        periodStart
-    ).run();
+        VALUES (${crypto.randomUUID()}, ${userId}, ${category}, ${alertLevel}, ${periodStart})
+    `);
     
     return true;
 }
 
 // Integrate with expense creation
 export async function checkBudgetAfterExpense<T extends Context = Context>(
-    db: D1Database,
+    db: Database,
     bot: Bot<T>,
     userId: string,
     groupId: string,

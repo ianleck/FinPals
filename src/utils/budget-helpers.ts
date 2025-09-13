@@ -1,5 +1,7 @@
-import { D1Database } from '@cloudflare/workers-types';
+import type { Database } from '../db';
+import { sql } from 'drizzle-orm';
 import { convertCurrencySync, refreshRatesCache } from './currency';
+import { toResultArray, getFirstResult } from './db-helpers';
 
 export interface BudgetWithSpending {
 	id: number;
@@ -18,14 +20,14 @@ export interface BudgetWithSpending {
  * Optimized to use a single query with window functions
  */
 export async function getBudgetsWithSpending(
-	db: D1Database,
+	db: Database,
 	userId: string
 ): Promise<BudgetWithSpending[]> {
 	// Refresh currency cache before calculations
 	await refreshRatesCache(db);
 	
 	// First get the raw data with expenses
-	const results = await db.prepare(`
+	const results = await db.execute(sql`
 		WITH budget_periods AS (
 			SELECT 
 				b.id,
@@ -42,7 +44,7 @@ export async function getBudgetsWithSpending(
 				END as period_start
 			FROM budgets b
 			LEFT JOIN users u ON b.user_id = u.telegram_id
-			WHERE b.user_id = ?
+			WHERE b.user_id = ${userId}
 		),
 		expense_data AS (
 			SELECT 
@@ -78,12 +80,12 @@ export async function getBudgetsWithSpending(
 		FROM budget_periods bp
 		LEFT JOIN expense_data ed ON bp.id = ed.budget_id
 		ORDER BY bp.category
-	`).bind(userId).all();
+	`);
 
 	// Process results to convert currencies and calculate spending
 	const budgetMap = new Map<number, BudgetWithSpending>();
 	
-	for (const row of results.results || []) {
+	for (const row of toResultArray<any>(results)) {
 		const budgetId = row.id as number;
 		
 		if (!budgetMap.has(budgetId)) {
@@ -128,7 +130,7 @@ export async function getBudgetsWithSpending(
  * Check if an expense would exceed budget limits
  */
 export async function checkBudgetLimits(
-	db: D1Database,
+	db: Database,
 	userId: string,
 	category?: string | null,
 	amount?: number
@@ -179,7 +181,7 @@ export async function checkBudgetLimits(
 	
 	if (!category) return { warning: false, message: null };
 
-	const budget = await db.prepare(`
+	const budgetResult = await db.execute(sql`
 		SELECT 
 			b.*,
 			COALESCE((
@@ -202,9 +204,11 @@ export async function checkBudgetLimits(
 					)
 			), 0) as current_spent
 		FROM budgets b
-		WHERE b.user_id = ? 
-			AND LOWER(TRIM(b.category)) = LOWER(TRIM(?))
-	`).bind(userId, category).first();
+		WHERE b.user_id = ${userId} 
+			AND LOWER(TRIM(b.category)) = LOWER(TRIM(${category}))
+	`);
+	
+	const budget = getFirstResult<any>(budgetResult);
 
 	if (!budget) return { warning: false, message: null };
 
@@ -231,7 +235,7 @@ export async function checkBudgetLimits(
  * Get user budgets (alias for getBudgetsWithSpending for tests)
  */
 export async function getUserBudgets(
-	db: D1Database,
+	db: Database,
 	userId: string
 ): Promise<BudgetWithSpending[]> {
 	return getBudgetsWithSpending(db, userId);

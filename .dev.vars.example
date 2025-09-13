@@ -1,9 +1,22 @@
-# Local development environment variables
+# Local development environment variables for Cloudflare Workers
 # Copy this file to .dev.vars and fill in your values
+# NEVER commit .dev.vars to version control!
 
 # CockroachDB connection string for local development
+# This overrides the Hyperdrive binding for local testing
 HYPERDRIVE_LOCAL_CONNECTION_STRING=postgresql://username:password@host:26257/database?sslmode=require
 
-# Bot tokens (optional for local testing)
+# Telegram Bot credentials (required)
+# Get from @BotFather on Telegram
 BOT_TOKEN=your_bot_token_here
-TELEGRAM_BOT_API_SECRET_TOKEN=your_secret_token_here
+
+# Webhook secret token (required)
+# Generate with: openssl rand -hex 32
+TELEGRAM_BOT_API_SECRET_TOKEN=your_webhook_secret_here
+
+# Exchange Rate API (optional)
+# Get free key from https://app.exchangerate-api.com/sign-up
+EXCHANGE_RATE_API_KEY=your_api_key_here
+
+# For Drizzle migrations (same as HYPERDRIVE_LOCAL_CONNECTION_STRING)
+DATABASE_URL=postgresql://username:password@host:26257/database?sslmode=require

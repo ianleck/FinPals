@@ -167,6 +167,14 @@ export const recurringExpenses = pgTable('recurring_expenses', {
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull()
 });
 
+// Exchange rates table
+export const exchangeRates = pgTable('exchange_rates', {
+  currencyCode: text('currency_code').primaryKey(),
+  rateToUsd: decimal('rate_to_usd', { precision: 20, scale: 10 }).notNull(),
+  source: text('source').default('frankfurter'),
+  lastUpdated: timestamp('last_updated', { withTimezone: true }).defaultNow().notNull()
+});
+
 // Relations (for query joins)
 export const usersRelations = relations(users, ({ many }) => ({
   expenses: many(expenses),

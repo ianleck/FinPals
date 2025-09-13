@@ -8,14 +8,16 @@ compatibility_flags = ["nodejs_compat"]
 account_id = "7a041c2905e112bf0752fd7c8e577f15"
 
 [vars]
-# These will be set as secrets in Cloudflare dashboard or via wrangler secret
-# BOT_TOKEN and TELEGRAM_BOT_API_SECRET_TOKEN should be set as secrets
-ENV = "development"
-BOT_TOKEN="7594760757:AAEwF9t5xOYzUmIRN8np8647PKMHKblSRv8"
-TELEGRAM_BOT_API_SECRET_TOKEN="3C2BE62791F90E6561D4BFBBCF7242DF526BF39E0B925BE485A8FF0F1C96CB24"
-# Exchange Rate API key (optional - will use mock rates if not provided)
-# Get free API key from https://app.exchangerate-api.com/sign-up
-# EXCHANGE_RATE_API_KEY = "your_api_key_here"
+# Environment configuration (this is production config)
+ENV = "production"
+
+# IMPORTANT: Never commit secrets to version control!
+# Set these via Cloudflare dashboard or wrangler secret command:
+# wrangler secret put BOT_TOKEN
+# wrangler secret put TELEGRAM_BOT_API_SECRET_TOKEN
+# wrangler secret put EXCHANGE_RATE_API_KEY (optional)
+
+# For local development, use .dev.vars file (never commit this file)
 
 # Workers Logs
 [observability]
@@ -44,51 +46,3 @@ new_sqlite_classes = ["SessionDO"]
 binding = "HYPERDRIVE"
 id = "7d0cebc7c9394008a9cfdbd3e2aea5c4"
 # For local development, set HYPERDRIVE_LOCAL_CONNECTION_STRING in .dev.vars
-# localConnectionString will be loaded from environment
-
-# D1 Database binding (kept for backward compatibility during migration)
-# [[d1_databases]]
-# binding = "DB"
-# database_name = "finpals-db"
-# database_id = "897f6b1e-e788-43c8-bc9a-0b499727716c"  # Replace with your database ID from dashboard
-
-
-# Production environment
-[env.production]
-vars = { ENV = "production" }
-
-[env.production.durable_objects]
-bindings = [
-  { name = "SESSIONS", class_name = "SessionDO" }
-]
-
-[[env.production.migrations]]
-tag = "0001_session_do"
-new_sqlite_classes = ["SessionDO"]
-
-[[env.production.hyperdrive]]
-binding = "HYPERDRIVE"
-id = "YOUR_HYPERDRIVE_ID"  # Replace with production Hyperdrive ID
-
-# [[env.production.d1_databases]]
-# binding = "DB"
-# database_name = "finpals-db"
-# database_id = "897f6b1e-e788-43c8-bc9a-0b499727716c"
-
-# Test environment
-[env.test]
-vars = { ENV = "test" }
-
-[env.test.durable_objects]
-bindings = [
-  { name = "SESSIONS", class_name = "SessionDO" }
-]
-
-[[env.test.migrations]]
-tag = "0001_session_do"
-new_sqlite_classes = ["SessionDO"]
-
-[[env.test.d1_databases]]
-binding = "DB"
-database_name = "finpals-db-test"
-database_id = "YOUR_TEST_DATABASE_ID"

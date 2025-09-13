@@ -75,8 +75,9 @@ export async function handleDelete(ctx: Context, db: Database) {
 				
 				// Add delete button if user can delete this expense
 				if (canDelete) {
+					const desc = expense.description || 'No description';
 					buttons.push([{
-						text: `🗑️ ${expense.id}: ${expense.description.substring(0, 20)}${expense.description.length > 20 ? '...' : ''}`,
+						text: `🗑️ ${expense.id}: ${desc.substring(0, 20)}${desc.length > 20 ? '...' : ''}`,
 						callback_data: `delete_${expense.id}`
 					}]);
 				}

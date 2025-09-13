@@ -1,7 +1,9 @@
 import { Context, Api } from 'grammy';
-import type { D1Database } from '@cloudflare/workers-types';
+import { eq, and, sql } from 'drizzle-orm';
+import type { Database } from '../db';
+import { users, groups, groupMembers } from '../db/schema';
 
-export async function enrollAllGroupMembers(ctx: Context, db: D1Database, groupId: string): Promise<{ enrolled: number; failed: number }> {
+export async function enrollAllGroupMembers(ctx: Context, db: Database, groupId: string): Promise<{ enrolled: number; failed: number }> {
 	const api = ctx.api;
 	let enrolled = 0;
 	let failed = 0;
@@ -33,44 +35,59 @@ export async function enrollAllGroupMembers(ctx: Context, db: D1Database, groupI
 	}
 }
 
-export async function enrollUser(ctx: Context, db: D1Database, groupId: string, user: any): Promise<void> {
+export async function enrollUser(ctx: Context, db: Database, groupId: string, user: any): Promise<void> {
 	const userId = user.id.toString();
 	const username = user.username || null;
 	const firstName = user.first_name || null;
 
-	// Ensure user exists
-	await db.prepare(
-		'INSERT OR IGNORE INTO users (telegram_id, username, first_name) VALUES (?, ?, ?)'
-	).bind(userId, username, firstName).run();
+	// Upsert user - insert if not exists, update if exists
+	await db.insert(users)
+		.values({
+			telegramId: userId,
+			username: username,
+			firstName: firstName
+		})
+		.onConflictDoUpdate({
+			target: users.telegramId,
+			set: {
+				username: username,
+				firstName: firstName
+			}
+		});
 
-	// Update user info if changed
-	await db.prepare(
-		'UPDATE users SET username = ?, first_name = ? WHERE telegram_id = ?'
-	).bind(username, firstName, userId).run();
-
-	// Ensure user is member of group
-	await db.prepare(
-		'INSERT OR IGNORE INTO group_members (group_id, user_id) VALUES (?, ?)'
-	).bind(groupId, userId).run();
-
-	// Ensure they're active
-	await db.prepare(
-		'UPDATE group_members SET active = TRUE WHERE group_id = ? AND user_id = ?'
-	).bind(groupId, userId).run();
+	// Upsert group member - insert if not exists, update if exists
+	await db.insert(groupMembers)
+		.values({
+			groupId: groupId,
+			userId: userId,
+			active: true
+		})
+		.onConflictDoUpdate({
+			target: [groupMembers.groupId, groupMembers.userId],
+			set: {
+				active: true
+			}
+		});
 }
 
-export async function getGroupEnrollmentStatus(ctx: Context, db: D1Database, groupId: string): Promise<{
+export async function getGroupEnrollmentStatus(ctx: Context, db: Database, groupId: string): Promise<{
 	enrolledUsers: Array<{ telegram_id: string; username: string | null; first_name: string | null }>;
 	totalMembers: number;
 }> {
 	// Get all enrolled users in the group
-	const enrolledUsers = await db.prepare(`
-		SELECT u.telegram_id, u.username, u.first_name
-		FROM users u
-		JOIN group_members gm ON u.telegram_id = gm.user_id
-		WHERE gm.group_id = ? AND gm.active = TRUE
-		ORDER BY u.first_name, u.username
-	`).bind(groupId).all<{ telegram_id: string; username: string | null; first_name: string | null }>();
+	const enrolledUsersResult = await db
+		.select({
+			telegram_id: users.telegramId,
+			username: users.username,
+			first_name: users.firstName
+		})
+		.from(users)
+		.innerJoin(groupMembers, eq(users.telegramId, groupMembers.userId))
+		.where(and(
+			eq(groupMembers.groupId, groupId),
+			eq(groupMembers.active, true)
+		))
+		.orderBy(users.firstName, users.username);
 
 	// Try to get the member count from Telegram
 	let totalMembers = 0;
@@ -81,11 +98,11 @@ export async function getGroupEnrollmentStatus(ctx: Context, db: D1Database, gro
 		}
 	} catch (error) {
 		console.error('Failed to get member count:', error);
-		totalMembers = enrolledUsers.results?.length || 0;
+		totalMembers = enrolledUsersResult.length || 0;
 	}
 
 	return {
-		enrolledUsers: enrolledUsers.results as Array<{ telegram_id: string; username: string | null; first_name: string | null }>,
+		enrolledUsers: enrolledUsersResult,
 		totalMembers
 	};
 }

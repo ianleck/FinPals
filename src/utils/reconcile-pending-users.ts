@@ -1,4 +1,15 @@
-import type { D1Database } from '@cloudflare/workers-types';
+import { eq, sql } from 'drizzle-orm';
+import { type Database } from '../db';
+import { 
+	users, 
+	expenseSplits, 
+	expenses, 
+	settlements, 
+	groupMembers,
+	budgets,
+	expenseTemplates,
+	recurringExpenses
+} from '../db/schema';
 
 // Cache reconciled users for 5 minutes to avoid repeated checks
 const reconciledCache = new Map<string, number>();
@@ -9,7 +20,7 @@ const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
  * This prevents duplicate participants when a pending user starts using the bot
  */
 export async function reconcilePendingUser(
-	db: D1Database,
+	db: Database,
 	realUserId: string,
 	username: string
 ): Promise<void> {
@@ -25,11 +36,12 @@ export async function reconcilePendingUser(
 	try {
 		// Check if there's a pending user with this username
 		const pendingUser = await db
-			.prepare('SELECT telegram_id FROM users WHERE telegram_id = ?')
-			.bind(pendingUserId)
-			.first();
+			.select()
+			.from(users)
+			.where(eq(users.telegramId, pendingUserId))
+			.limit(1);
 			
-		if (!pendingUser) {
+		if (pendingUser.length === 0) {
 			// No pending user to reconcile, cache this
 			reconciledCache.set(cacheKey, Date.now());
 			return;
@@ -37,30 +49,56 @@ export async function reconcilePendingUser(
 		
 		console.log(`Reconciling pending user ${pendingUserId} with real user ${realUserId}`);
 		
-		// Batch all reconciliation updates
-		const updates = [
-			{ table: 'expense_splits', column: 'user_id' },
-			{ table: 'expenses', column: 'paid_by' },
-			{ table: 'expenses', column: 'created_by' },
-			{ table: 'settlements', column: 'from_user' },
-			{ table: 'settlements', column: 'to_user' },
-			{ table: 'group_members', column: 'user_id' },
-			{ table: 'budgets', column: 'user_id' },
-			{ table: 'expense_templates', column: 'user_id' },
-			{ table: 'recurring_expenses', column: 'created_by' }
-		];
-		
-		// Execute all updates
-		await Promise.all(
-			updates.map(({ table, column }) =>
-				db.prepare(`UPDATE ${table} SET ${column} = ? WHERE ${column} = ?`)
-					.bind(realUserId, pendingUserId)
-					.run()
-			)
-		);
+		// Batch all reconciliation updates using Drizzle ORM
+		await Promise.all([
+			// Update expense_splits
+			db.update(expenseSplits)
+				.set({ userId: realUserId })
+				.where(eq(expenseSplits.userId, pendingUserId)),
+			
+			// Update expenses - paid_by
+			db.update(expenses)
+				.set({ paidBy: realUserId })
+				.where(eq(expenses.paidBy, pendingUserId)),
+			
+			// Update expenses - created_by
+			db.update(expenses)
+				.set({ createdBy: realUserId })
+				.where(eq(expenses.createdBy, pendingUserId)),
+			
+			// Update settlements - from_user
+			db.update(settlements)
+				.set({ fromUser: realUserId })
+				.where(eq(settlements.fromUser, pendingUserId)),
+			
+			// Update settlements - to_user
+			db.update(settlements)
+				.set({ toUser: realUserId })
+				.where(eq(settlements.toUser, pendingUserId)),
+			
+			// Update group_members
+			db.update(groupMembers)
+				.set({ userId: realUserId })
+				.where(eq(groupMembers.userId, pendingUserId)),
+			
+			// Update budgets
+			db.update(budgets)
+				.set({ userId: realUserId })
+				.where(eq(budgets.userId, pendingUserId)),
+			
+			// Update expense_templates
+			db.update(expenseTemplates)
+				.set({ userId: realUserId })
+				.where(eq(expenseTemplates.userId, pendingUserId)),
+			
+			// Update recurring_expenses
+			db.update(recurringExpenses)
+				.set({ createdBy: realUserId })
+				.where(eq(recurringExpenses.createdBy, pendingUserId))
+		]);
 		
 		// Delete the pending user record
-		await db.prepare('DELETE FROM users WHERE telegram_id = ?').bind(pendingUserId).run();
+		await db.delete(users).where(eq(users.telegramId, pendingUserId));
 		
 		// Cache successful reconciliation
 		reconciledCache.set(cacheKey, Date.now());
@@ -86,7 +124,7 @@ export async function reconcilePendingUser(
  * Check if a user needs reconciliation based on their username
  */
 export async function checkAndReconcileUser(
-	db: D1Database,
+	db: Database,
 	realUserId: string,
 	username: string | null
 ): Promise<void> {
