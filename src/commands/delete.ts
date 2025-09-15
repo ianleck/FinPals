@@ -1,4 +1,4 @@
-import { Context } from 'grammy';
+import { Context, InlineKeyboard } from 'grammy';
 import { eq, and, desc } from 'drizzle-orm';
 import { type Database, withRetry, parseDecimal } from '../db';
 import { expenses, users } from '../db/schema';
@@ -56,7 +56,7 @@ export async function handleDelete(ctx: Context, db: Database) {
 
 			// Format the list of recent expenses
 			let message = '🗑️ <b>Select an expense to delete:</b>\n\n';
-			const buttons: any[][] = [];
+			const keyboard = new InlineKeyboard();
 
 			recentExpenses.forEach((expense) => {
 				const creatorName = expense.username ? `@${expense.username}` : expense.firstName || 'Unknown';
@@ -72,26 +72,17 @@ export async function handleDelete(ctx: Context, db: Database) {
 				// Add delete button if user can delete this expense
 				if (canDelete) {
 					const desc = expense.description || 'No description';
-					buttons.push([
-						{
-							text: `🗑️ ${expense.id}: ${desc.substring(0, 20)}${desc.length > 20 ? '...' : ''}`,
-							callback_data: `delete_${expense.id}`,
-						},
-					]);
+					keyboard.text(`🗑️ ${expense.id}: ${desc.substring(0, 20)}${desc.length > 20 ? '...' : ''}`, `delete_${expense.id}`).row();
 				}
 			});
 
 			message += '💡 <i>Use:</i> <code>/delete [ID]</code> <i>to delete</i>\n';
 			message += '✅ <i>= You can delete this expense</i>';
 
-			const replyOptions: any = { parse_mode: 'HTML' };
-			if (buttons.length > 0) {
-				replyOptions.reply_markup = {
-					inline_keyboard: buttons,
-				};
-			}
-
-			await ctx.reply(message, replyOptions);
+			await ctx.reply(message, {
+				parse_mode: 'HTML',
+				reply_markup: keyboard,
+			});
 			return;
 		} catch (error) {
 			logger.error('Error fetching recent expenses', error);

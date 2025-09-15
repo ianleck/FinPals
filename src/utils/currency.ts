@@ -5,6 +5,7 @@ import { eq, gt } from 'drizzle-orm';
 import type { Database } from '../db';
 import { users, exchangeRates } from '../db/schema';
 import { logger } from './logger';
+import type { FrankfurterResponse } from '../types/common';
 
 const MOCK_RATES: { [key: string]: number } = {
 	USD: 1,
@@ -52,12 +53,12 @@ export async function updateExchangeRatesInDB(db: Database): Promise<boolean> {
 			return false;
 		}
 
-		const data = (await response.json()) as any;
-		const rates: { [key: string]: number } = { USD: 1 };
+		const data = (await response.json()) as FrankfurterResponse;
+		const rates: Record<string, number> = { USD: 1 };
 
 		// Convert the rates to USD base
 		for (const [currency, rate] of Object.entries(data.rates)) {
-			rates[currency] = rate as number;
+			rates[currency] = rate;
 		}
 
 		// Update all rates in database
@@ -243,7 +244,7 @@ export function parseCurrencyFromText(text: string): { amount: number; currency:
 				// Symbol first
 				const symbol = match[1];
 				const amount = parseFloat(match[2]);
-				const currency = Object.entries(CURRENCY_SYMBOLS).find(([_, s]) => s === symbol)?.[0] || 'USD';
+				const currency = Object.entries(CURRENCY_SYMBOLS).find(([, s]) => s === symbol)?.[0] || 'USD';
 				return { amount, currency };
 			} else if (pattern === patterns[1]) {
 				// Amount then code

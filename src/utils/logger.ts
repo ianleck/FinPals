@@ -5,13 +5,13 @@
 interface LogContext {
 	userId?: string;
 	groupId?: string;
-	[key: string]: any;
+	[key: string]: unknown;
 }
 
 /**
  * Sanitize sensitive data from errors
  */
-function sanitize(data: any): any {
+function sanitize(data: unknown): unknown {
 	if (!data) return data;
 
 	const str = JSON.stringify(data);
@@ -35,13 +35,12 @@ export const logger = {
 		console.warn(`[WARN] ${msg}`, ctx || '');
 	},
 
-	error: (msg: string, error?: any, ctx?: LogContext) => {
+	error: (msg: string, error?: unknown, ctx?: LogContext) => {
 		const safeError = error ? sanitize(error) : undefined;
 		console.error(`[ERROR] ${msg}`, safeError, ctx || '');
 	},
 
-	debug: (_msg: string, _ctx?: LogContext) => {
+	debug: () => {
 		// Debug logs disabled in production
-		// console.log(`[DEBUG] ${msg}`, ctx || '');
 	},
 };

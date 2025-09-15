@@ -3,7 +3,7 @@ import { eq, and, sql, inArray } from 'drizzle-orm';
 import { type Database, withRetry } from '../db';
 import { users, groups, groupMembers, expenses, expenseSplits } from '../db/schema';
 import { ERROR_MESSAGES } from '../utils/constants';
-import { replyAndCleanup, MESSAGE_LIFETIMES } from '../utils/message';
+import { replyAndCleanup } from '../utils/message';
 import { extractNote } from '../utils/note-parser';
 import { parseEnhancedSplits } from '../utils/split-parser';
 import { formatCurrency } from '../utils/currency';
@@ -61,7 +61,7 @@ export async function handleAdd(ctx: Context, db: Database) {
 	const groupId = ctx.chat?.id.toString();
 
 	if (!userId) {
-		await replyAndCleanup(ctx, ERROR_MESSAGES.GENERIC, {}, MESSAGE_LIFETIMES.ERROR);
+		await replyAndCleanup(ctx, ERROR_MESSAGES.GENERIC, {});
 		return;
 	}
 
@@ -84,14 +84,14 @@ export async function handleAdd(ctx: Context, db: Database) {
 				'• /add 120 lunch @john @sarah - Split evenly\n' +
 				'• /add 120 lunch @john=50 @sarah=70 - Fixed amounts';
 
-		await replyAndCleanup(ctx, usage, { parse_mode: 'HTML' }, MESSAGE_LIFETIMES.ERROR);
+		await replyAndCleanup(ctx, usage, { parse_mode: 'HTML' });
 		return;
 	}
 
 	// Parse amount
 	const amount = parseMoney(args[0]);
 	if (!amount || amount.isZero() || amount.isNegative()) {
-		await replyAndCleanup(ctx, ERROR_MESSAGES.INVALID_AMOUNT, {}, MESSAGE_LIFETIMES.ERROR);
+		await replyAndCleanup(ctx, ERROR_MESSAGES.INVALID_AMOUNT, {});
 		return;
 	}
 
@@ -169,8 +169,9 @@ export async function handleAdd(ctx: Context, db: Database) {
 				let parsedSplits;
 				try {
 					parsedSplits = parseEnhancedSplits(mentionArgs, amount.toNumber());
-				} catch (error: any) {
-					throw new Error(`Split parsing error: ${error.message}`);
+				} catch (error) {
+					const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+					throw new Error(`Split parsing error: ${errorMessage}`);
 				}
 
 				const { mentions, paidBy: paidByMention } = parsedSplits;
@@ -330,7 +331,8 @@ export async function handleAdd(ctx: Context, db: Database) {
 			parse_mode: 'HTML',
 			reply_markup: buttons ? { inline_keyboard: buttons } : undefined,
 		});
-	} catch (error: any) {
-		await replyAndCleanup(ctx, `❌ Error adding expense: ${error.message}`, {}, MESSAGE_LIFETIMES.ERROR);
+	} catch (error) {
+		const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+		await replyAndCleanup(ctx, `❌ Error adding expense: ${errorMessage}`, {});
 	}
 }

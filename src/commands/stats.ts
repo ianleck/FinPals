@@ -130,7 +130,7 @@ export async function handleStats(ctx: Context, db: Database) {
 				],
 			},
 		});
-	} catch (error) {
+	} catch {
 		await ctx.reply('❌ Error getting statistics. Please try again.');
 	}
 }

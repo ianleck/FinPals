@@ -4,6 +4,7 @@ import { sql } from 'drizzle-orm';
 import { formatCurrency, convertCurrencySync, refreshRatesCache } from './currency';
 import { toResultArray, hasResults, getFirstResult } from './db-helpers';
 import { logger } from './logger';
+import type { BudgetWithCurrency, ExpenseRow, CountResult } from '../types/common';
 
 interface BudgetAlert {
 	userId: string;
@@ -43,10 +44,10 @@ export async function checkBudgetAlerts(
 	}
 
 	// Calculate current spending for each budget
-	for (const budget of toResultArray<any>(budgets)) {
-		const category = budget.category as string;
-		const limit = budget.amount as number;
-		const period = budget.period as string;
+	for (const budget of toResultArray<BudgetWithCurrency>(budgets)) {
+		const category = budget.category;
+		const limit = budget.amount;
+		const period = budget.period;
 
 		// Calculate date range based on period
 		const now = new Date();
@@ -70,7 +71,7 @@ export async function checkBudgetAlerts(
 				continue;
 		}
 
-		const budgetCurrency = budget.currency as string;
+		const budgetCurrency = budget.currency;
 
 		// Get spending in this category with currency info
 		const expenses = await db.execute(sql`
@@ -101,9 +102,9 @@ export async function checkBudgetAlerts(
 
 		// Convert all expenses to budget currency and sum
 		let currentSpent = 0;
-		for (const expense of toResultArray<any>(expenses)) {
-			const amount = expense.amount as number;
-			const currency = (expense.currency as string) || 'USD';
+		for (const expense of toResultArray<ExpenseRow>(expenses)) {
+			const amount = expense.amount;
+			const currency = expense.currency || 'USD';
 			currentSpent += currency === budgetCurrency ? amount : convertCurrencySync(amount, currency, budgetCurrency);
 		}
 
@@ -207,8 +208,8 @@ export async function shouldSendAlert(
             AND period_start = ${periodStart}
     `);
 
-	const firstRow = getFirstResult<any>(existing);
-	if ((firstRow?.count as number) > 0) {
+	const firstRow = getFirstResult<CountResult>(existing);
+	if (firstRow && firstRow.count > 0) {
 		return false;
 	}
 

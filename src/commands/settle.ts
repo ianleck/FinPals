@@ -52,7 +52,7 @@ export async function handleSettle(ctx: Context, db: Database) {
 
 	// Check for partial settlement
 	if (args[1].toLowerCase() === 'partial') {
-		await handlePartialSettlement(ctx, db, mention, groupId, fromUserId, fromUsername);
+		await handlePartialSettlement(ctx, db, mention, groupId, fromUserId);
 		return;
 	}
 
@@ -345,14 +345,7 @@ export async function handleSettleCallback(ctx: Context, db: Database) {
 	}
 }
 
-async function handlePartialSettlement(
-	ctx: Context,
-	db: Database,
-	mention: string,
-	groupId: string,
-	fromUserId: string,
-	_fromUsername: string,
-) {
+async function handlePartialSettlement(ctx: Context, db: Database, mention: string, groupId: string, fromUserId: string) {
 	try {
 		// Get the mentioned user
 		const groupMember = await withRetry(async () => {

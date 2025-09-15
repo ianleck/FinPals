@@ -3,7 +3,7 @@ import { Context } from 'grammy';
 // Delete a message after a specified delay
 // NOTE: This won't work in Cloudflare Workers due to stateless nature
 // Keeping for future implementation with Durable Objects or Queues
-export async function deleteMessageAfterDelay(_ctx: Context, _messageId: number, _delayMs = 30000): Promise<void> {
+export async function deleteMessageAfterDelay(): Promise<void> {
 	// TODO: Implement with Cloudflare Queues or Durable Objects
 	// Message deletion scheduling not implemented in serverless environment
 }
@@ -21,15 +21,11 @@ export async function deleteUserMessage(ctx: Context): Promise<void> {
 }
 
 // Send a reply that auto-deletes after a delay
-export async function sendTemporaryMessage(
-	ctx: Context,
-	text: string,
-	options: any = {},
-	deleteAfterMs: number = 60000, // Default 1 minute
-): Promise<void> {
+export async function sendTemporaryMessage(ctx: Context, text: string, options: Record<string, unknown> = {}): Promise<void> {
 	try {
-		const message = await ctx.reply(text, options);
-		deleteMessageAfterDelay(ctx, message.message_id, deleteAfterMs);
+		await ctx.reply(text, options);
+		// Message deletion not supported in serverless environment
+		deleteMessageAfterDelay();
 	} catch {
 		// Error sending temporary message
 	}

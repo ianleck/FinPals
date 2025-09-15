@@ -3,6 +3,7 @@ import { eq, and, desc, sql } from 'drizzle-orm';
 import { type Database, withRetry, parseDecimal } from '../db';
 import { expenses, users, expenseSplits } from '../db/schema';
 import { logger } from '../utils/logger';
+import type { ExpenseWithPayer } from '../types/common';
 
 export async function handleExpenses(ctx: Context, db: Database) {
 	const isPersonal = ctx.chat?.type === 'private';
@@ -82,7 +83,7 @@ export async function handleExpenses(ctx: Context, db: Database) {
 	}
 }
 
-export async function showExpensesPage(ctx: Context, expenses: any[], page: number) {
+export async function showExpensesPage(ctx: Context, expenses: ExpenseWithPayer[], page: number) {
 	const pageSize = 5;
 	const totalPages = Math.ceil(expenses.length / pageSize);
 	const startIdx = page * pageSize;
@@ -275,7 +276,7 @@ export async function handleExpenseSelection(ctx: Context, db: Database) {
 // Handle personal expenses
 async function handlePersonalExpenses(ctx: Context, db: Database, userId: string) {
 	try {
-		// Get all personal expenses
+		// Get all personal expenses with user info
 		const expenseList = await withRetry(async () => {
 			return await db
 				.select({
@@ -285,8 +286,13 @@ async function handlePersonalExpenses(ctx: Context, db: Database, userId: string
 					description: expenses.description,
 					category: expenses.category,
 					createdAt: expenses.createdAt,
+					createdBy: expenses.createdBy,
+					notes: expenses.notes,
+					payerUsername: users.username,
+					payerFirstName: users.firstName,
 				})
 				.from(expenses)
+				.innerJoin(users, eq(expenses.paidBy, users.telegramId))
 				.where(and(eq(expenses.paidBy, userId), eq(expenses.isPersonal, true), eq(expenses.deleted, false)))
 				.orderBy(desc(expenses.createdAt));
 		});
@@ -306,7 +312,7 @@ async function handlePersonalExpenses(ctx: Context, db: Database, userId: string
 	}
 }
 
-export async function showPersonalExpensesPage(ctx: Context, expenses: any[], page: number) {
+export async function showPersonalExpensesPage(ctx: Context, expenses: ExpenseWithPayer[], page: number) {
 	const pageSize = 5;
 	const totalPages = Math.ceil(expenses.length / pageSize);
 	const startIdx = page * pageSize;

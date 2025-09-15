@@ -21,6 +21,5 @@ export function toResultArray<T>(result: unknown): T[] {
  * Check if result has any rows
  */
 export function hasResults(result: unknown): boolean {
-	const results = result as any[];
-	return results && results.length > 0;
+	return Array.isArray(result) && result.length > 0;
 }

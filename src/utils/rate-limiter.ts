@@ -132,7 +132,8 @@ export class RateLimiter {
 		const reset = headers.get('x-ratelimit-reset');
 
 		if (limit && remaining && reset) {
-			logger.debug('Rate limit headers', { limit, remaining, reset });
+			// Debug logging disabled
+			// logger.debug('Rate limit headers', { limit, remaining, reset });
 		}
 	}
 

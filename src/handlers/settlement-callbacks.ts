@@ -4,8 +4,8 @@
  */
 
 import { Bot, Context } from 'grammy';
-import { eq, and, or, sql } from 'drizzle-orm';
-import { createDb, withRetry } from '../db';
+import { eq, or, sql } from 'drizzle-orm';
+import { createDb } from '../db';
 import { settlements, users } from '../db/schema';
 import { getFirstResult } from '../utils/db-helpers';
 import { logger } from '../utils/logger';

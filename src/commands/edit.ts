@@ -213,8 +213,9 @@ export async function handleEdit(ctx: Context, db: Database) {
 				let parsedSplits;
 				try {
 					parsedSplits = parseEnhancedSplits(splitArgs, currentAmount);
-				} catch (error: any) {
-					await reply(ctx, `❌ ${error.message}`);
+				} catch (error) {
+					const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+					await reply(ctx, `❌ ${errorMessage}`);
 					return;
 				}
 

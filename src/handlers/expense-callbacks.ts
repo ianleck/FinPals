@@ -5,14 +5,13 @@
 
 import { Bot, Context } from 'grammy';
 import { eq, and, desc, sql } from 'drizzle-orm';
-import { createDb, withRetry } from '../db';
+import { createDb } from '../db';
 import { expenses, users, expenseSplits, categoryMappings } from '../db/schema';
 import { EXPENSE_CATEGORIES } from '../utils/constants';
 import { logger } from '../utils/logger';
 import { showExpensesPage, handleExpenseSelection } from '../commands/expenses';
 import { handleAdd } from '../commands/add';
 import { handleEditCallback } from '../commands/edit';
-import { Money } from '../utils/money';
 import type { Env } from '../index';
 
 type MyContext = Context & { env: Env };
@@ -171,11 +170,12 @@ async function handleExpensePage(ctx: MyContext) {
 				currency: expenses.currency,
 				description: expenses.description,
 				category: expenses.category,
-				created_at: expenses.createdAt,
-				created_by: expenses.createdBy,
-				payer_username: users.username,
-				payer_first_name: users.firstName,
-				split_count: sql<number>`(SELECT COUNT(*) FROM expense_splits WHERE expense_id = ${expenses.id})`,
+				createdAt: expenses.createdAt,
+				createdBy: expenses.createdBy,
+				notes: expenses.notes,
+				payerUsername: users.username,
+				payerFirstName: users.firstName,
+				splitCount: sql<number>`(SELECT COUNT(*) FROM expense_splits WHERE expense_id = ${expenses.id})`,
 			})
 			.from(expenses)
 			.innerJoin(users, eq(expenses.paidBy, users.telegramId))
@@ -219,9 +219,14 @@ async function handlePersonalExpensePage(ctx: MyContext) {
 				currency: expenses.currency,
 				description: expenses.description,
 				category: expenses.category,
-				created_at: expenses.createdAt,
+				createdAt: expenses.createdAt,
+				createdBy: expenses.createdBy,
+				notes: expenses.notes,
+				payerUsername: users.username,
+				payerFirstName: users.firstName,
 			})
 			.from(expenses)
+			.innerJoin(users, eq(expenses.paidBy, users.telegramId))
 			.where(and(eq(expenses.paidBy, userId), eq(expenses.isPersonal, true), eq(expenses.deleted, false)))
 			.orderBy(desc(expenses.createdAt));
 
@@ -343,11 +348,12 @@ async function handleDeleteExpense(ctx: MyContext) {
 					currency: expenses.currency,
 					description: expenses.description,
 					category: expenses.category,
-					created_at: expenses.createdAt,
-					created_by: expenses.createdBy,
-					payer_username: users.username,
-					payer_first_name: users.firstName,
-					split_count: sql<number>`(SELECT COUNT(*) FROM expense_splits WHERE expense_id = ${expenses.id})`,
+					createdAt: expenses.createdAt,
+					createdBy: expenses.createdBy,
+					notes: expenses.notes,
+					payerUsername: users.username,
+					payerFirstName: users.firstName,
+					splitCount: sql<number>`(SELECT COUNT(*) FROM expense_splits WHERE expense_id = ${expenses.id})`,
 				})
 				.from(expenses)
 				.innerJoin(users, eq(expenses.paidBy, users.telegramId))
@@ -542,11 +548,12 @@ async function handleSetCategory(ctx: MyContext) {
 					currency: expenses.currency,
 					description: expenses.description,
 					category: expenses.category,
-					created_at: expenses.createdAt,
-					created_by: expenses.createdBy,
-					payer_username: users.username,
-					payer_first_name: users.firstName,
-					split_count: sql<number>`(SELECT COUNT(*) FROM expense_splits WHERE expense_id = ${expenses.id})`,
+					createdAt: expenses.createdAt,
+					createdBy: expenses.createdBy,
+					notes: expenses.notes,
+					payerUsername: users.username,
+					payerFirstName: users.firstName,
+					splitCount: sql<number>`(SELECT COUNT(*) FROM expense_splits WHERE expense_id = ${expenses.id})`,
 				})
 				.from(expenses)
 				.innerJoin(users, eq(expenses.paidBy, users.telegramId))

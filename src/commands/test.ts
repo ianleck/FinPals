@@ -29,8 +29,9 @@ export async function handleTest(ctx: Context): Promise<void> {
 			try {
 				await ctx.api.deleteMessage(ctx.chat.id, ctx.message.message_id);
 				permissionInfo += '\n✅ Successfully deleted your message!';
-			} catch (error: any) {
-				permissionInfo += `\n❌ Could not delete message: ${error.message}`;
+			} catch (error) {
+				const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+				permissionInfo += `\n❌ Could not delete message: ${errorMessage}`;
 			}
 		}
 
