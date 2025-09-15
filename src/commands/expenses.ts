@@ -2,17 +2,17 @@ import { Context } from 'grammy';
 import { eq, and, desc, sql } from 'drizzle-orm';
 import { type Database, withRetry, parseDecimal } from '../db';
 import { expenses, users, expenseSplits } from '../db/schema';
-import { EXPENSE_CATEGORIES } from '../utils/constants';
+import { logger } from '../utils/logger';
 
 export async function handleExpenses(ctx: Context, db: Database) {
 	const isPersonal = ctx.chat?.type === 'private';
 	const userId = ctx.from?.id.toString();
-	
+
 	if (!ctx.from) {
 		await ctx.reply('❌ Unable to identify user. Please try again.');
 		return;
 	}
-	
+
 	if (isPersonal) {
 		// Show personal expenses
 		await handlePersonalExpenses(ctx, db, userId!);
@@ -25,7 +25,7 @@ export async function handleExpenses(ctx: Context, db: Database) {
 	}
 
 	const groupId = ctx.chat.id.toString();
-	
+
 	try {
 		// Get all expenses with payer info and split count
 		const expenseList = await withRetry(async () => {
@@ -41,59 +41,43 @@ export async function handleExpenses(ctx: Context, db: Database) {
 					createdBy: expenses.createdBy,
 					notes: expenses.notes,
 					payerUsername: users.username,
-					payerFirstName: users.firstName
+					payerFirstName: users.firstName,
 				})
 				.from(expenses)
 				.innerJoin(users, eq(expenses.paidBy, users.telegramId))
-				.where(
-					and(
-						eq(expenses.groupId, groupId),
-						eq(expenses.deleted, false)
-					)
-				)
+				.where(and(eq(expenses.groupId, groupId), eq(expenses.deleted, false)))
 				.orderBy(desc(expenses.createdAt));
 
 			// Get split counts for each expense
 			const splitCounts = await db
 				.select({
 					expenseId: expenseSplits.expenseId,
-					splitCount: sql<number>`COUNT(*)::int`
+					splitCount: sql<number>`COUNT(*)::int`,
 				})
 				.from(expenseSplits)
 				.innerJoin(expenses, eq(expenseSplits.expenseId, expenses.id))
-				.where(
-					and(
-						eq(expenses.groupId, groupId),
-						eq(expenses.deleted, false)
-					)
-				)
+				.where(and(eq(expenses.groupId, groupId), eq(expenses.deleted, false)))
 				.groupBy(expenseSplits.expenseId);
 
 			// Create a map of split counts
-			const splitCountMap = new Map(
-				splitCounts.map(sc => [sc.expenseId, sc.splitCount])
-			);
+			const splitCountMap = new Map(splitCounts.map((sc) => [sc.expenseId, sc.splitCount]));
 
 			// Combine the data
-			return expensesWithPayers.map(exp => ({
+			return expensesWithPayers.map((exp) => ({
 				...exp,
-				splitCount: splitCountMap.get(exp.id) || 0
+				splitCount: splitCountMap.get(exp.id) || 0,
 			}));
 		});
 
 		if (!expenseList || expenseList.length === 0) {
-			await ctx.reply(
-				'📭 <b>No Expenses Yet</b>\n\n' +
-				'Start tracking expenses with /add',
-				{ parse_mode: 'HTML' }
-			);
+			await ctx.reply('📭 <b>No Expenses Yet</b>\n\n' + 'Start tracking expenses with /add', { parse_mode: 'HTML' });
 			return;
 		}
 
 		// Show the first page
 		await showExpensesPage(ctx, expenseList, 0);
 	} catch (error) {
-		console.error('Error getting expenses:', error);
+		logger.error('Error getting expenses', error);
 		await ctx.reply('❌ Error retrieving expenses. Please try again.');
 	}
 }
@@ -119,7 +103,7 @@ export async function showExpensesPage(ctx: Context, expenses: any[], page: numb
 		const payerName = expense.payerUsername || expense.payerFirstName || 'Unknown';
 		const category = expense.category ? `[${expense.category}]` : '[Uncategorized]';
 		const amount = parseDecimal(expense.amount);
-		
+
 		message += `${num}. <b>${expense.description}</b> ${category}\n`;
 		message += `   $${amount.toFixed(2)} by @${payerName} • ${date}\n`;
 		message += `   Split: ${expense.splitCount} people\n\n`;
@@ -138,23 +122,19 @@ export async function showExpensesPage(ctx: Context, expenses: any[], page: numb
 	// Build action buttons - show numbers for selection
 	const actionButtons = [];
 	for (let i = 0; i < pageExpenses.length; i++) {
-		actionButtons.push({ 
-			text: `${startIdx + i + 1}`, 
-			callback_data: `exp_select:${page}:${i}` 
+		actionButtons.push({
+			text: `${startIdx + i + 1}`,
+			callback_data: `exp_select:${page}:${i}`,
 		});
 	}
 
-	const keyboard = [
-		actionButtons,
-		navButtons,
-		[{ text: '❌ Close', callback_data: 'close' }]
-	];
+	const keyboard = [actionButtons, navButtons, [{ text: '❌ Close', callback_data: 'close' }]];
 
 	const replyOptions = {
 		parse_mode: 'HTML' as const,
 		reply_markup: {
-			inline_keyboard: keyboard
-		}
+			inline_keyboard: keyboard,
+		},
 	};
 
 	// If this is from a callback, edit the message
@@ -168,7 +148,7 @@ export async function showExpensesPage(ctx: Context, expenses: any[], page: numb
 // Handle expense selection for actions
 export async function handleExpenseSelection(ctx: Context, db: Database) {
 	const callbackData = ctx.callbackQuery?.data || '';
-	const [_, pageStr, idxStr] = callbackData.split(':');
+	const [, pageStr, idxStr] = callbackData.split(':');
 	const page = parseInt(pageStr);
 	const idx = parseInt(idxStr);
 	const groupId = ctx.chat?.id.toString();
@@ -193,43 +173,31 @@ export async function handleExpenseSelection(ctx: Context, db: Database) {
 					createdBy: expenses.createdBy,
 					notes: expenses.notes,
 					payerUsername: users.username,
-					payerFirstName: users.firstName
+					payerFirstName: users.firstName,
 				})
 				.from(expenses)
 				.innerJoin(users, eq(expenses.paidBy, users.telegramId))
-				.where(
-					and(
-						eq(expenses.groupId, groupId),
-						eq(expenses.deleted, false)
-					)
-				)
+				.where(and(eq(expenses.groupId, groupId), eq(expenses.deleted, false)))
 				.orderBy(desc(expenses.createdAt));
 
 			// Get split counts for each expense
 			const splitCounts = await db
 				.select({
 					expenseId: expenseSplits.expenseId,
-					splitCount: sql<number>`COUNT(*)::int`
+					splitCount: sql<number>`COUNT(*)::int`,
 				})
 				.from(expenseSplits)
 				.innerJoin(expenses, eq(expenseSplits.expenseId, expenses.id))
-				.where(
-					and(
-						eq(expenses.groupId, groupId),
-						eq(expenses.deleted, false)
-					)
-				)
+				.where(and(eq(expenses.groupId, groupId), eq(expenses.deleted, false)))
 				.groupBy(expenseSplits.expenseId);
 
 			// Create a map of split counts
-			const splitCountMap = new Map(
-				splitCounts.map(sc => [sc.expenseId, sc.splitCount])
-			);
+			const splitCountMap = new Map(splitCounts.map((sc) => [sc.expenseId, sc.splitCount]));
 
 			// Combine the data
-			return expensesWithPayers.map(exp => ({
+			return expensesWithPayers.map((exp) => ({
 				...exp,
-				splitCount: splitCountMap.get(exp.id) || 0
+				splitCount: splitCountMap.get(exp.id) || 0,
 			}));
 		});
 
@@ -262,7 +230,7 @@ export async function handleExpenseSelection(ctx: Context, db: Database) {
 		detailMessage += `<b>Split:</b> ${expense.splitCount} people\n`;
 		detailMessage += `<b>Category:</b> ${category}\n`;
 		detailMessage += `<b>Date:</b> ${date}\n`;
-		
+
 		// Receipt functionality temporarily disabled
 		// const { getExpenseReceipt } = await import('./archive/receipt');
 		// const receipt = await getExpenseReceipt(db, expense.id);
@@ -270,13 +238,13 @@ export async function handleExpenseSelection(ctx: Context, db: Database) {
 		// 	detailMessage += `<b>Receipt:</b> 📎 Attached\n`;
 		// }
 		const receipt = false; // Placeholder for disabled receipt functionality
-		
+
 		detailMessage += `\nWhat would you like to do?`;
 
 		const actionButtons = [
 			[{ text: '📂 Change Category', callback_data: `cat:${expense.id}:${page}` }],
 			[{ text: '✏️ Edit Expense', callback_data: `edit:${expense.id}` }],
-			[{ text: '📊 View Full Details', callback_data: `exp:${expense.id}` }]
+			[{ text: '📊 View Full Details', callback_data: `exp:${expense.id}` }],
 		];
 
 		// Add View Receipt button if receipt exists
@@ -293,13 +261,13 @@ export async function handleExpenseSelection(ctx: Context, db: Database) {
 		await ctx.editMessageText(detailMessage, {
 			parse_mode: 'HTML',
 			reply_markup: {
-				inline_keyboard: actionButtons
-			}
+				inline_keyboard: actionButtons,
+			},
 		});
 
 		await ctx.answerCallbackQuery();
 	} catch (error) {
-		console.error('Error selecting expense:', error);
+		logger.error('Error selecting expense', error);
 		await ctx.answerCallbackQuery('Error loading expense');
 	}
 }
@@ -316,33 +284,24 @@ async function handlePersonalExpenses(ctx: Context, db: Database, userId: string
 					currency: expenses.currency,
 					description: expenses.description,
 					category: expenses.category,
-					createdAt: expenses.createdAt
+					createdAt: expenses.createdAt,
 				})
 				.from(expenses)
-				.where(
-					and(
-						eq(expenses.paidBy, userId),
-						eq(expenses.isPersonal, true),
-						eq(expenses.deleted, false)
-					)
-				)
+				.where(and(eq(expenses.paidBy, userId), eq(expenses.isPersonal, true), eq(expenses.deleted, false)))
 				.orderBy(desc(expenses.createdAt));
 		});
 
 		if (!expenseList || expenseList.length === 0) {
-			await ctx.reply(
-				'📭 <b>No Personal Expenses Yet</b>\n\n' +
-				'Start tracking with:\n' +
-				'<code>/add [amount] [description]</code>',
-				{ parse_mode: 'HTML' }
-			);
+			await ctx.reply('📭 <b>No Personal Expenses Yet</b>\n\n' + 'Start tracking with:\n' + '<code>/add [amount] [description]</code>', {
+				parse_mode: 'HTML',
+			});
 			return;
 		}
 
 		// Show the first page
 		await showPersonalExpensesPage(ctx, expenseList, 0);
 	} catch (error) {
-		console.error('Error getting personal expenses:', error);
+		logger.error('Error getting personal expenses', error);
 		await ctx.reply('❌ Error retrieving expenses. Please try again.');
 	}
 }
@@ -367,7 +326,7 @@ export async function showPersonalExpensesPage(ctx: Context, expenses: any[], pa
 		const date = new Date(expense.createdAt).toLocaleDateString();
 		const category = expense.category ? `[${expense.category}]` : '[Uncategorized]';
 		const amount = parseDecimal(expense.amount);
-		
+
 		message += `${num}. <b>${expense.description}</b> ${category}\n`;
 		message += `   $${amount.toFixed(2)} • ${date}\n\n`;
 	});
@@ -385,9 +344,9 @@ export async function showPersonalExpensesPage(ctx: Context, expenses: any[], pa
 	// Build action buttons
 	const actionButtons = [];
 	for (let i = 0; i < pageExpenses.length; i++) {
-		actionButtons.push({ 
-			text: `${startIdx + i + 1}`, 
-			callback_data: `personal_exp_select:${page}:${i}` 
+		actionButtons.push({
+			text: `${startIdx + i + 1}`,
+			callback_data: `personal_exp_select:${page}:${i}`,
 		});
 	}
 
@@ -396,20 +355,20 @@ export async function showPersonalExpensesPage(ctx: Context, expenses: any[], pa
 		navButtons,
 		[
 			{ text: '💵 Add Expense', callback_data: 'add_expense_help' },
-			{ text: '❌ Close', callback_data: 'close' }
-		]
+			{ text: '❌ Close', callback_data: 'close' },
+		],
 	];
 
 	// Edit or send message
 	if (ctx.callbackQuery) {
 		await ctx.editMessageText(message, {
 			parse_mode: 'HTML',
-			reply_markup: { inline_keyboard: keyboard }
+			reply_markup: { inline_keyboard: keyboard },
 		});
 	} else {
 		await ctx.reply(message, {
 			parse_mode: 'HTML',
-			reply_markup: { inline_keyboard: keyboard }
+			reply_markup: { inline_keyboard: keyboard },
 		});
 	}
 }

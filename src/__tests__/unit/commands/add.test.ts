@@ -10,7 +10,7 @@ describe('Add Command', () => {
 		it('should parse valid amount', () => {
 			const money = parseMoney('25.50');
 			expect(money).not.toBeNull();
-			expect(money?.toNumber()).toBe(25.50);
+			expect(money?.toNumber()).toBe(25.5);
 		});
 
 		it('should parse amount with currency symbol', () => {

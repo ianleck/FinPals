@@ -4,8 +4,8 @@ import { Money, parseMoney, formatMoney, sumMoney } from '../../utils/money';
 describe('Money Class', () => {
 	describe('Construction', () => {
 		it('should create Money from number', () => {
-			const money = new Money(10.50);
-			expect(money.toNumber()).toBe(10.50);
+			const money = new Money(10.5);
+			expect(money.toNumber()).toBe(10.5);
 			expect(money.toString()).toBe('10.50');
 		});
 
@@ -17,7 +17,7 @@ describe('Money Class', () => {
 
 		it('should create Money from cents', () => {
 			const money = Money.fromCents(1550);
-			expect(money.toNumber()).toBe(15.50);
+			expect(money.toNumber()).toBe(15.5);
 			expect(money.toCents()).toBe(1550);
 		});
 
@@ -31,7 +31,7 @@ describe('Money Class', () => {
 
 	describe('Arithmetic Operations', () => {
 		it('should add money correctly', () => {
-			const a = new Money(10.50);
+			const a = new Money(10.5);
 			const b = new Money(5.25);
 			const result = a.add(b);
 			expect(result.toNumber()).toBe(15.75);
@@ -39,9 +39,9 @@ describe('Money Class', () => {
 
 		it('should subtract money correctly', () => {
 			const a = new Money(20);
-			const b = new Money(7.50);
+			const b = new Money(7.5);
 			const result = a.subtract(b);
-			expect(result.toNumber()).toBe(12.50);
+			expect(result.toNumber()).toBe(12.5);
 		});
 
 		it('should multiply by number', () => {
@@ -67,7 +67,7 @@ describe('Money Class', () => {
 			const money = new Money(30);
 			const splits = money.splitEvenly(3);
 			expect(splits).toHaveLength(3);
-			splits.forEach(split => {
+			splits.forEach((split) => {
 				expect(split.toNumber()).toBe(10);
 			});
 		});
@@ -165,13 +165,13 @@ describe('Money Class', () => {
 
 describe('Money Parsing', () => {
 	it('should parse valid amounts', () => {
-		expect(parseMoney('10.50')?.toNumber()).toBe(10.50);
+		expect(parseMoney('10.50')?.toNumber()).toBe(10.5);
 		expect(parseMoney(25)?.toNumber()).toBe(25);
 		expect(parseMoney('100')?.toNumber()).toBe(100);
 	});
 
 	it('should parse amounts with currency symbols', () => {
-		expect(parseMoney('$10.50')?.toNumber()).toBe(10.50);
+		expect(parseMoney('$10.50')?.toNumber()).toBe(10.5);
 		expect(parseMoney('€25')?.toNumber()).toBe(25);
 		expect(parseMoney('£100.00')?.toNumber()).toBe(100);
 	});
@@ -218,11 +218,7 @@ describe('Money Formatting', () => {
 
 describe('Money Utilities', () => {
 	it('should sum array of money', () => {
-		const amounts = [
-			new Money(10),
-			new Money(20),
-			new Money(30)
-		];
+		const amounts = [new Money(10), new Money(20), new Money(30)];
 		const total = sumMoney(amounts);
 		expect(total.toNumber()).toBe(60);
 	});

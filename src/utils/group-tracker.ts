@@ -1,9 +1,10 @@
 import { Context } from 'grammy';
 import { eq, and } from 'drizzle-orm';
-import { createDb, type Database, withRetry } from '../db';
+import { createDb, withRetry } from '../db';
 import { users, groups, groupMembers } from '../db/schema';
 import { checkAndReconcileUser } from './reconcile-pending-users';
 import type { Env } from '../index';
+import { logger } from './logger';
 
 type MyContext = Context & { env: Env };
 
@@ -25,11 +26,7 @@ export async function trackGroupMetadata(ctx: MyContext): Promise<void> {
 
 		await withRetry(async () => {
 			// Check if group exists in our database
-			const existingGroup = await db
-				.select()
-				.from(groups)
-				.where(eq(groups.telegramId, groupId))
-				.limit(1);
+			const existingGroup = await db.select().from(groups).where(eq(groups.telegramId, groupId)).limit(1);
 
 			if (existingGroup.length === 0) {
 				// Create group entry
@@ -39,10 +36,7 @@ export async function trackGroupMetadata(ctx: MyContext): Promise<void> {
 				});
 			} else {
 				// Update group title if changed
-				await db
-					.update(groups)
-					.set({ title: groupTitle })
-					.where(eq(groups.telegramId, groupId));
+				await db.update(groups).set({ title: groupTitle }).where(eq(groups.telegramId, groupId));
 			}
 
 			// Track user if they sent a message
@@ -57,11 +51,7 @@ export async function trackGroupMetadata(ctx: MyContext): Promise<void> {
 				await checkAndReconcileUser(db, userId, username);
 
 				// Ensure user exists - upsert pattern
-				const existingUser = await db
-					.select()
-					.from(users)
-					.where(eq(users.telegramId, userId))
-					.limit(1);
+				const existingUser = await db.select().from(users).where(eq(users.telegramId, userId)).limit(1);
 
 				if (existingUser.length === 0) {
 					await db.insert(users).values({
@@ -72,22 +62,14 @@ export async function trackGroupMetadata(ctx: MyContext): Promise<void> {
 					});
 				} else {
 					// Update user info if changed
-					await db
-						.update(users)
-						.set({ username, firstName, lastName })
-						.where(eq(users.telegramId, userId));
+					await db.update(users).set({ username, firstName, lastName }).where(eq(users.telegramId, userId));
 				}
 
 				// Ensure user is member of group
 				const existingMembership = await db
 					.select()
 					.from(groupMembers)
-					.where(
-						and(
-							eq(groupMembers.groupId, groupId),
-							eq(groupMembers.userId, userId)
-						)
-					)
+					.where(and(eq(groupMembers.groupId, groupId), eq(groupMembers.userId, userId)))
 					.limit(1);
 
 				if (existingMembership.length === 0) {
@@ -101,12 +83,7 @@ export async function trackGroupMetadata(ctx: MyContext): Promise<void> {
 					await db
 						.update(groupMembers)
 						.set({ active: true })
-						.where(
-							and(
-								eq(groupMembers.groupId, groupId),
-								eq(groupMembers.userId, userId)
-							)
-						);
+						.where(and(eq(groupMembers.groupId, groupId), eq(groupMembers.userId, userId)));
 				}
 			}
 
@@ -116,12 +93,7 @@ export async function trackGroupMetadata(ctx: MyContext): Promise<void> {
 				await db
 					.update(groupMembers)
 					.set({ active: false })
-					.where(
-						and(
-							eq(groupMembers.groupId, groupId),
-							eq(groupMembers.userId, leftUserId)
-						)
-					);
+					.where(and(eq(groupMembers.groupId, groupId), eq(groupMembers.userId, leftUserId)));
 			}
 
 			// Handle new members
@@ -137,11 +109,7 @@ export async function trackGroupMetadata(ctx: MyContext): Promise<void> {
 						await checkAndReconcileUser(db, newUserId, newUsername);
 
 						// Ensure user exists - upsert pattern
-						const existingUser = await db
-							.select()
-							.from(users)
-							.where(eq(users.telegramId, newUserId))
-							.limit(1);
+						const existingUser = await db.select().from(users).where(eq(users.telegramId, newUserId)).limit(1);
 
 						if (existingUser.length === 0) {
 							await db.insert(users).values({
@@ -156,12 +124,7 @@ export async function trackGroupMetadata(ctx: MyContext): Promise<void> {
 						const existingMembership = await db
 							.select()
 							.from(groupMembers)
-							.where(
-								and(
-									eq(groupMembers.groupId, groupId),
-									eq(groupMembers.userId, newUserId)
-								)
-							)
+							.where(and(eq(groupMembers.groupId, groupId), eq(groupMembers.userId, newUserId)))
 							.limit(1);
 
 						if (existingMembership.length === 0) {
@@ -176,6 +139,6 @@ export async function trackGroupMetadata(ctx: MyContext): Promise<void> {
 			}
 		});
 	} catch (error: any) {
-		console.error('[Error] Failed to track group metadata:', error?.message || 'Unknown error');
+		logger.error('[Error] Failed to track group metadata', error?.message || 'Unknown error');
 	}
 }

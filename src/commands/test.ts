@@ -1,4 +1,5 @@
 import { Context } from 'grammy';
+import { logger } from '../utils/logger';
 
 export async function handleTest(ctx: Context): Promise<void> {
 	if (!ctx.from || !ctx.chat || ctx.chat.type === 'private') {
@@ -9,10 +10,10 @@ export async function handleTest(ctx: Context): Promise<void> {
 	try {
 		// Get bot's permissions in the chat
 		const botMember = await ctx.api.getChatMember(ctx.chat.id, ctx.me.id);
-		
+
 		let permissionInfo = '🤖 <b>Bot Permissions:</b>\n\n';
 		permissionInfo += `Status: ${botMember.status}\n`;
-		
+
 		if (botMember.status === 'administrator') {
 			permissionInfo += '\n✅ Bot is an admin\n';
 			permissionInfo += `Can delete messages: ${botMember.can_delete_messages ? '✅' : '❌'}\n`;
@@ -22,7 +23,7 @@ export async function handleTest(ctx: Context): Promise<void> {
 			permissionInfo += '\n❌ Bot is NOT an admin\n';
 			permissionInfo += 'Need admin rights to delete messages!\n';
 		}
-		
+
 		// Try to delete the test command message
 		if (ctx.message) {
 			try {
@@ -32,10 +33,10 @@ export async function handleTest(ctx: Context): Promise<void> {
 				permissionInfo += `\n❌ Could not delete message: ${error.message}`;
 			}
 		}
-		
+
 		await ctx.reply(permissionInfo, { parse_mode: 'HTML' });
 	} catch (error) {
-		console.error('Error in test command:', error);
+		logger.error('Error in test command', error);
 		await ctx.reply('❌ Error checking permissions');
 	}
 }

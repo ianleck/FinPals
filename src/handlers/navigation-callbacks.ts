@@ -8,6 +8,7 @@ import { createDb } from '../db';
 import { handleHistory } from '../commands/history';
 import { handleStats } from '../commands/stats';
 import { handleInfo } from '../commands/info';
+import { logger } from '../utils/logger';
 import type { Env } from '../index';
 
 type MyContext = Context & { env: Env };
@@ -57,14 +58,11 @@ async function handleViewTrends(ctx: MyContext) {
 		await ctx.reply(trendsMessage, {
 			parse_mode: 'HTML',
 			reply_markup: {
-				inline_keyboard: [
-					[{ text: '📊 Back to Stats', callback_data: 'view_stats' }],
-					[{ text: '❌ Close', callback_data: 'close' }]
-				]
-			}
+				inline_keyboard: [[{ text: '📊 Back to Stats', callback_data: 'view_stats' }], [{ text: '❌ Close', callback_data: 'close' }]],
+			},
 		});
 	} catch (error) {
-		console.error('Error getting trends:', error);
+		logger.error('Error getting trends', error);
 		await ctx.reply('❌ Error loading trends. Please try again.');
 	}
 }
@@ -78,18 +76,18 @@ async function handleSearchHelp(ctx: MyContext) {
 	await ctx.answerCallbackQuery();
 	await ctx.reply(
 		'🔍 <b>Search Help</b>\n\n' +
-		'You can search by:\n' +
-		'• <b>Text:</b> /search lunch\n' +
-		'• <b>Amount:</b> /search >50\n' +
-		'• <b>Range:</b> /search 20-100\n' +
-		'• <b>Person:</b> /search @john\n' +
-		'• <b>Date:</b> /search yesterday\n' +
-		'• <b>Combine:</b> /search coffee last week\n\n' +
-		'More examples:\n' +
-		'• /search dinner >30\n' +
-		'• /search @sarah last month\n' +
-		'• /search uber 10-50',
-		{ parse_mode: 'HTML' }
+			'You can search by:\n' +
+			'• <b>Text:</b> /search lunch\n' +
+			'• <b>Amount:</b> /search >50\n' +
+			'• <b>Range:</b> /search 20-100\n' +
+			'• <b>Person:</b> /search @john\n' +
+			'• <b>Date:</b> /search yesterday\n' +
+			'• <b>Combine:</b> /search coffee last week\n\n' +
+			'More examples:\n' +
+			'• /search dinner >30\n' +
+			'• /search @sarah last month\n' +
+			'• /search uber 10-50',
+		{ parse_mode: 'HTML' },
 	);
 }
 
@@ -101,8 +99,7 @@ async function handleClose(ctx: MyContext) {
 async function handleEditSplit(ctx: MyContext) {
 	await ctx.answerCallbackQuery();
 	await ctx.reply(
-		'✏️ Edit split functionality coming soon!\n\n' +
-		'For now, you can delete the expense and create a new one with the correct split.',
-		{ parse_mode: 'HTML' }
+		'✏️ Edit split functionality coming soon!\n\n' + 'For now, you can delete the expense and create a new one with the correct split.',
+		{ parse_mode: 'HTML' },
 	);
 }

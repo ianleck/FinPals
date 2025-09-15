@@ -19,13 +19,10 @@ export interface BudgetWithSpending {
  * Get all budgets with spending calculations for a user
  * Optimized to use a single query with window functions
  */
-export async function getBudgetsWithSpending(
-	db: Database,
-	userId: string
-): Promise<BudgetWithSpending[]> {
+export async function getBudgetsWithSpending(db: Database, userId: string): Promise<BudgetWithSpending[]> {
 	// Refresh currency cache before calculations
 	await refreshRatesCache(db);
-	
+
 	// First get the raw data with expenses
 	const results = await db.execute(sql`
 		WITH budget_periods AS (
@@ -84,10 +81,10 @@ export async function getBudgetsWithSpending(
 
 	// Process results to convert currencies and calculate spending
 	const budgetMap = new Map<number, BudgetWithSpending>();
-	
+
 	for (const row of toResultArray<any>(results)) {
 		const budgetId = row.id as number;
-		
+
 		if (!budgetMap.has(budgetId)) {
 			budgetMap.set(budgetId, {
 				id: budgetId,
@@ -98,31 +95,28 @@ export async function getBudgetsWithSpending(
 				period: row.period as 'daily' | 'weekly' | 'monthly',
 				created_at: row.created_at as string,
 				spent: 0,
-				percentage: 0
+				percentage: 0,
 			});
 		}
-		
+
 		const budget = budgetMap.get(budgetId)!;
-		
+
 		// Convert expense amount to budget currency if needed
 		if (row.user_amount && row.expense_currency) {
-			const convertedAmount = row.expense_currency === budget.currency
-				? row.user_amount as number
-				: convertCurrencySync(
-					row.user_amount as number,
-					row.expense_currency as string,
-					budget.currency
-				);
+			const convertedAmount =
+				row.expense_currency === budget.currency
+					? (row.user_amount as number)
+					: convertCurrencySync(row.user_amount as number, row.expense_currency as string, budget.currency);
 			budget.spent += convertedAmount;
 		}
 	}
-	
+
 	// Calculate percentages and return as array
 	const budgets = Array.from(budgetMap.values());
 	for (const budget of budgets) {
 		budget.percentage = Math.round((budget.spent / budget.amount) * 100);
 	}
-	
+
 	return budgets.sort((a, b) => a.category.localeCompare(b.category));
 }
 
@@ -133,52 +127,52 @@ export async function checkBudgetLimits(
 	db: Database,
 	userId: string,
 	category?: string | null,
-	amount?: number
+	amount?: number,
 ): Promise<{ warning: boolean; message: string | null } | Array<any>> {
 	// If no category/amount provided, check all budgets (for tests)
 	if (category === undefined && amount === undefined) {
 		const budgets = await getBudgetsWithSpending(db, userId);
 		const warnings: Array<{ category: string; message: string }> = [];
-		
+
 		for (const budget of budgets) {
 			if (budget.percentage >= 100) {
 				warnings.push({
 					category: budget.category,
-					message: `🚨 ${budget.category} budget exceeded! ($${budget.spent.toFixed(2)}/$${budget.amount.toFixed(2)})`
+					message: `🚨 ${budget.category} budget exceeded! ($${budget.spent.toFixed(2)}/$${budget.amount.toFixed(2)})`,
 				});
 			} else if (budget.percentage >= 80) {
 				warnings.push({
 					category: budget.category,
-					message: `⚠️ ${budget.category} budget at ${budget.percentage}%`
+					message: `⚠️ ${budget.category} budget at ${budget.percentage}%`,
 				});
 			}
 		}
-		
+
 		return warnings;
 	}
-	
+
 	// Special case for test - when both category and amount are provided
 	if (category && amount !== undefined) {
 		const budgets = await getBudgetsWithSpending(db, userId);
 		const warnings: Array<any> = [];
-		
+
 		for (const budget of budgets) {
 			if (budget.category.toLowerCase() === category.toLowerCase()) {
 				const newTotal = budget.spent + amount;
 				const newPercentage = (newTotal / budget.amount) * 100;
-				
+
 				warnings.push({
 					category: budget.category,
 					message: `Budget check for ${budget.category}`,
 					newPercentage: Math.round(newPercentage),
-					isExceeded: newPercentage > 100
+					isExceeded: newPercentage > 100,
 				});
 			}
 		}
-		
+
 		return warnings;
 	}
-	
+
 	if (!category) return { warning: false, message: null };
 
 	const budgetResult = await db.execute(sql`
@@ -207,7 +201,7 @@ export async function checkBudgetLimits(
 		WHERE b.user_id = ${userId} 
 			AND LOWER(TRIM(b.category)) = LOWER(TRIM(${category}))
 	`);
-	
+
 	const budget = getFirstResult<any>(budgetResult);
 
 	if (!budget) return { warning: false, message: null };
@@ -219,12 +213,12 @@ export async function checkBudgetLimits(
 	if (percentage > 100) {
 		return {
 			warning: true,
-			message: `⚠️ This will exceed your ${budget.period} budget for ${category}! ($${newTotal.toFixed(2)}/$${budgetAmount.toFixed(2)})`
+			message: `⚠️ This will exceed your ${budget.period} budget for ${category}! ($${newTotal.toFixed(2)}/$${budgetAmount.toFixed(2)})`,
 		};
 	} else if (percentage > 80) {
 		return {
 			warning: true,
-			message: `⚠️ This will use ${percentage.toFixed(0)}% of your ${budget.period} budget for ${category}`
+			message: `⚠️ This will use ${percentage.toFixed(0)}% of your ${budget.period} budget for ${category}`,
 		};
 	}
 
@@ -234,10 +228,7 @@ export async function checkBudgetLimits(
 /**
  * Get user budgets (alias for getBudgetsWithSpending for tests)
  */
-export async function getUserBudgets(
-	db: Database,
-	userId: string
-): Promise<BudgetWithSpending[]> {
+export async function getUserBudgets(db: Database, userId: string): Promise<BudgetWithSpending[]> {
 	return getBudgetsWithSpending(db, userId);
 }
 

@@ -15,11 +15,7 @@ export async function handleStart(ctx: Context, db: Database) {
 		if (userId) {
 			await withRetry(async () => {
 				// Check if user exists
-				const existingUser = await db
-					.select()
-					.from(users)
-					.where(eq(users.telegramId, userId))
-					.limit(1);
+				const existingUser = await db.select().from(users).where(eq(users.telegramId, userId)).limit(1);
 
 				if (existingUser.length === 0) {
 					// Insert new user
@@ -58,17 +54,13 @@ export async function handleStart(ctx: Context, db: Database) {
 						[{ text: '❓ Help', callback_data: 'help' }],
 					],
 				},
-			}
+			},
 		);
 	} else if (chatId && (chatType === 'group' || chatType === 'supergroup')) {
 		// Initialize group in database if not exists
 		await withRetry(async () => {
 			// Check if group exists
-			const existingGroup = await db
-				.select()
-				.from(groups)
-				.where(eq(groups.telegramId, chatId))
-				.limit(1);
+			const existingGroup = await db.select().from(groups).where(eq(groups.telegramId, chatId)).limit(1);
 
 			if (existingGroup.length === 0) {
 				// Insert new group
@@ -81,11 +73,7 @@ export async function handleStart(ctx: Context, db: Database) {
 			// Add bot creator/admin as member if they exist
 			if (userId) {
 				// Ensure user exists
-				const existingUser = await db
-					.select()
-					.from(users)
-					.where(eq(users.telegramId, userId))
-					.limit(1);
+				const existingUser = await db.select().from(users).where(eq(users.telegramId, userId)).limit(1);
 
 				if (existingUser.length === 0) {
 					await db.insert(users).values({
@@ -100,12 +88,7 @@ export async function handleStart(ctx: Context, db: Database) {
 				const existingMembership = await db
 					.select()
 					.from(groupMembers)
-					.where(
-						and(
-							eq(groupMembers.groupId, chatId),
-							eq(groupMembers.userId, userId)
-						)
-					)
+					.where(and(eq(groupMembers.groupId, chatId), eq(groupMembers.userId, userId)))
 					.limit(1);
 
 				if (existingMembership.length === 0) {

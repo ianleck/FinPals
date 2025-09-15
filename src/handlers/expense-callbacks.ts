@@ -5,13 +5,14 @@
 
 import { Bot, Context } from 'grammy';
 import { eq, and, desc, sql } from 'drizzle-orm';
-import { createDb, type Database, withRetry } from '../db';
+import { createDb, withRetry } from '../db';
 import { expenses, users, expenseSplits, categoryMappings } from '../db/schema';
 import { EXPENSE_CATEGORIES } from '../utils/constants';
-import { showExpensesPage, showPersonalExpensesPage, handleExpenseSelection } from '../commands/expenses';
+import { logger } from '../utils/logger';
+import { showExpensesPage, handleExpenseSelection } from '../commands/expenses';
 import { handleAdd } from '../commands/add';
 import { handleEditCallback } from '../commands/edit';
-import { Money, formatMoney } from '../utils/money';
+import { Money } from '../utils/money';
 import type { Env } from '../index';
 
 type MyContext = Context & { env: Env };
@@ -65,13 +66,10 @@ async function handleAddExpenseHelp(ctx: MyContext) {
 					.selectDistinct({
 						description: expenses.description,
 						amount: expenses.amount,
-						category: expenses.category
+						category: expenses.category,
 					})
 					.from(expenses)
-					.where(and(
-						eq(expenses.createdBy, userId),
-						eq(expenses.isPersonal, true)
-					))
+					.where(and(eq(expenses.createdBy, userId), eq(expenses.isPersonal, true)))
 					.orderBy(desc(expenses.createdAt))
 					.limit(3);
 			} else if (groupId) {
@@ -79,19 +77,15 @@ async function handleAddExpenseHelp(ctx: MyContext) {
 					.selectDistinct({
 						description: expenses.description,
 						amount: expenses.amount,
-						category: expenses.category
+						category: expenses.category,
 					})
 					.from(expenses)
-					.where(and(
-						eq(expenses.groupId, groupId),
-						eq(expenses.createdBy, userId),
-						eq(expenses.deleted, false)
-					))
+					.where(and(eq(expenses.groupId, groupId), eq(expenses.createdBy, userId), eq(expenses.deleted, false)))
 					.orderBy(desc(expenses.createdAt))
 					.limit(3);
 			}
-		} catch (error) {
-			console.error('Error fetching recent expenses:', error);
+		} catch {
+			logger.error('Error fetching recent expenses');
 		}
 	}
 
@@ -101,57 +95,57 @@ async function handleAddExpenseHelp(ctx: MyContext) {
 	// Common amounts buttons
 	const commonAmounts = isPrivate
 		? [
-			[{ text: '☕ $5 Coffee', callback_data: 'quick_add:5:coffee' }],
-			[{ text: '🍽️ $15 Lunch', callback_data: 'quick_add:15:lunch' }],
-			[{ text: '🛒 $50 Groceries', callback_data: 'quick_add:50:groceries' }],
-		]
+				[{ text: '☕ $5 Coffee', callback_data: 'quick_add:5:coffee' }],
+				[{ text: '🍽️ $15 Lunch', callback_data: 'quick_add:15:lunch' }],
+				[{ text: '🛒 $50 Groceries', callback_data: 'quick_add:50:groceries' }],
+			]
 		: [
-			[{ text: '☕ $10 Coffee', callback_data: 'quick_add:10:coffee:split' }],
-			[{ text: '🍽️ $60 Lunch', callback_data: 'quick_add:60:lunch:split' }],
-			[{ text: '🚕 $30 Uber', callback_data: 'quick_add:30:uber:split' }],
-		];
+				[{ text: '☕ $10 Coffee', callback_data: 'quick_add:10:coffee:split' }],
+				[{ text: '🍽️ $60 Lunch', callback_data: 'quick_add:60:lunch:split' }],
+				[{ text: '🚕 $30 Uber', callback_data: 'quick_add:30:uber:split' }],
+			];
 
 	// Recent expenses if any
-	const recentButtons = recentExpenses.slice(0, 2).map(exp => [{
-		text: `↻ $${exp.amount} ${exp.description}`,
-		callback_data: `quick_add:${exp.amount}:${exp.description.substring(0, 20)}:${isPrivate ? 'personal' : 'split'}`
-	}]);
+	const recentButtons = recentExpenses.slice(0, 2).map((exp) => [
+		{
+			text: `↻ $${exp.amount} ${exp.description}`,
+			callback_data: `quick_add:${exp.amount}:${exp.description.substring(0, 20)}:${isPrivate ? 'personal' : 'split'}`,
+		},
+	]);
 
 	const keyboard = [
 		...commonAmounts,
 		...recentButtons,
 		[{ text: '📝 Custom Expense', callback_data: 'add_expense_custom' }],
-		[{ text: '❌ Cancel', callback_data: 'close' }]
+		[{ text: '❌ Cancel', callback_data: 'close' }],
 	];
 
 	if (recentExpenses.length > 0) {
 		message += '<b>Recent:</b>\n';
-		recentExpenses.forEach(exp => {
+		recentExpenses.forEach((exp) => {
 			message += `• $${exp.amount} - ${exp.description}\n`;
 		});
 		message += '\n';
 	}
 
-	message += isPrivate
-		? 'Choose a quick expense or create custom:'
-		: 'Choose a quick expense to split with everyone:';
+	message += isPrivate ? 'Choose a quick expense or create custom:' : 'Choose a quick expense to split with everyone:';
 
 	await ctx.reply(message, {
 		parse_mode: 'HTML',
-		reply_markup: { inline_keyboard: keyboard }
+		reply_markup: { inline_keyboard: keyboard },
 	});
 }
 
 async function handleViewExpenses(ctx: MyContext) {
 	await ctx.answerCallbackQuery();
 	const db = createDb(ctx.env);
-	await import('../commands/expenses').then(m => m.handleExpenses(ctx, db));
+	await import('../commands/expenses').then((m) => m.handleExpenses(ctx, db));
 }
 
 async function handleViewPersonalExpenses(ctx: MyContext) {
 	await ctx.answerCallbackQuery();
 	const db = createDb(ctx.env);
-	await import('../commands/expenses').then(m => m.handleExpenses(ctx, db));
+	await import('../commands/expenses').then((m) => m.handleExpenses(ctx, db));
 }
 
 async function handleExpensePage(ctx: MyContext) {
@@ -181,20 +175,17 @@ async function handleExpensePage(ctx: MyContext) {
 				created_by: expenses.createdBy,
 				payer_username: users.username,
 				payer_first_name: users.firstName,
-				split_count: sql<number>`(SELECT COUNT(*) FROM expense_splits WHERE expense_id = ${expenses.id})`
+				split_count: sql<number>`(SELECT COUNT(*) FROM expense_splits WHERE expense_id = ${expenses.id})`,
 			})
 			.from(expenses)
 			.innerJoin(users, eq(expenses.paidBy, users.telegramId))
-			.where(and(
-				eq(expenses.groupId, groupId),
-				eq(expenses.deleted, false)
-			))
+			.where(and(eq(expenses.groupId, groupId), eq(expenses.deleted, false)))
 			.orderBy(desc(expenses.createdAt));
 
 		await ctx.answerCallbackQuery();
 		await showExpensesPage(ctx, expensesResult, page);
-	} catch (error) {
-		console.error('Error navigating expenses:', error);
+	} catch {
+		logger.error('Error navigating expenses');
 		await ctx.answerCallbackQuery('Error loading expenses');
 	}
 }
@@ -211,6 +202,12 @@ async function handlePersonalExpensePage(ctx: MyContext) {
 	}
 	const page = parseInt(ctx.callbackQuery.data.split(':')[1]);
 	const userId = ctx.from?.id.toString();
+
+	if (!userId) {
+		await ctx.answerCallbackQuery('User not found');
+		return;
+	}
+
 	const db = createDb(ctx.env);
 
 	try {
@@ -222,21 +219,17 @@ async function handlePersonalExpensePage(ctx: MyContext) {
 				currency: expenses.currency,
 				description: expenses.description,
 				category: expenses.category,
-				created_at: expenses.createdAt
+				created_at: expenses.createdAt,
 			})
 			.from(expenses)
-			.where(and(
-				eq(expenses.paidBy, userId),
-				eq(expenses.isPersonal, true),
-				eq(expenses.deleted, false)
-			))
+			.where(and(eq(expenses.paidBy, userId), eq(expenses.isPersonal, true), eq(expenses.deleted, false)))
 			.orderBy(desc(expenses.createdAt));
 
 		await ctx.answerCallbackQuery();
 		const { showPersonalExpensesPage } = await import('../commands/expenses');
 		await showPersonalExpensesPage(ctx, expensesResult, page);
-	} catch (error) {
-		console.error('Error navigating personal expenses:', error);
+	} catch {
+		logger.error('Error navigating personal expenses');
 		await ctx.answerCallbackQuery('Error loading expenses');
 	}
 }
@@ -253,9 +246,7 @@ async function handleQuickAdd(ctx: MyContext) {
 	const db = createDb(ctx.env);
 
 	// Execute the add command
-	const command = type === 'personal' || ctx.chat?.type === 'private'
-		? `/add ${amount} ${description}`
-		: `/add ${amount} ${description}`;
+	const command = type === 'personal' || ctx.chat?.type === 'private' ? `/add ${amount} ${description}` : `/add ${amount} ${description}`;
 
 	// Create a fake message context for handleAdd
 	const fakeCtx = {
@@ -266,8 +257,8 @@ async function handleQuickAdd(ctx: MyContext) {
 			chat: ctx.chat!,
 			text: command,
 			entities: [],
-			from: ctx.from
-		}
+			from: ctx.from,
+		},
 	};
 
 	// Delete the quick add menu
@@ -286,7 +277,7 @@ async function handleAddExpenseCustom(ctx: MyContext) {
 		isPrivate
 			? '💵 To add a custom expense, use:\n<code>/add [amount] [description]</code>\n\nExample: <code>/add 25.50 lunch</code>'
 			: '💵 To add a custom expense, use:\n<code>/add [amount] [description] [@mentions]</code>\n\nExamples:\n• <code>/add 50 dinner</code> - Split with everyone\n• <code>/add 30 coffee @john</code> - Split with John',
-		{ parse_mode: 'HTML' }
+		{ parse_mode: 'HTML' },
 	);
 }
 
@@ -309,14 +300,10 @@ async function handleDeleteExpense(ctx: MyContext) {
 				id: expenses.id,
 				description: expenses.description,
 				amount: expenses.amount,
-				created_by: expenses.createdBy
+				created_by: expenses.createdBy,
 			})
 			.from(expenses)
-			.where(and(
-				eq(expenses.id, expenseId),
-				eq(expenses.groupId, groupId!),
-				eq(expenses.deleted, false)
-			))
+			.where(and(eq(expenses.id, expenseId), eq(expenses.groupId, groupId!), eq(expenses.deleted, false)))
 			.limit(1);
 
 		const expense = expenseResult[0];
@@ -342,10 +329,7 @@ async function handleDeleteExpense(ctx: MyContext) {
 		}
 
 		// Delete the expense
-		await db
-			.update(expenses)
-			.set({ deleted: true })
-			.where(eq(expenses.id, expenseId));
+		await db.update(expenses).set({ deleted: true }).where(eq(expenses.id, expenseId));
 
 		await ctx.answerCallbackQuery('Expense deleted successfully');
 
@@ -363,26 +347,22 @@ async function handleDeleteExpense(ctx: MyContext) {
 					created_by: expenses.createdBy,
 					payer_username: users.username,
 					payer_first_name: users.firstName,
-					split_count: sql<number>`(SELECT COUNT(*) FROM expense_splits WHERE expense_id = ${expenses.id})`
+					split_count: sql<number>`(SELECT COUNT(*) FROM expense_splits WHERE expense_id = ${expenses.id})`,
 				})
 				.from(expenses)
 				.innerJoin(users, eq(expenses.paidBy, users.telegramId))
-				.where(and(
-					eq(expenses.groupId, groupId!),
-					eq(expenses.deleted, false)
-				))
+				.where(and(eq(expenses.groupId, groupId!), eq(expenses.deleted, false)))
 				.orderBy(desc(expenses.createdAt));
 
 			await showExpensesPage(ctx, expensesResult, returnPage);
 		} else {
 			// Just update the message
-			await ctx.editMessageText(
-				`❌ <b>Deleted:</b> ${expense.description} - $${parseFloat(expense.amount).toFixed(2)}`,
-				{ parse_mode: 'HTML' }
-			);
+			await ctx.editMessageText(`❌ <b>Deleted:</b> ${expense.description} - $${parseFloat(expense.amount).toFixed(2)}`, {
+				parse_mode: 'HTML',
+			});
 		}
-	} catch (error) {
-		console.error('Error deleting expense:', error);
+	} catch {
+		logger.error('Error deleting expense');
 		await ctx.answerCallbackQuery('Error deleting expense');
 	}
 }
@@ -407,15 +387,11 @@ async function handleDeleteCallback(ctx: MyContext) {
 				amount: expenses.amount,
 				created_by: expenses.createdBy,
 				username: users.username,
-				first_name: users.firstName
+				first_name: users.firstName,
 			})
 			.from(expenses)
 			.innerJoin(users, eq(expenses.createdBy, users.telegramId))
-			.where(and(
-				eq(expenses.id, expenseId),
-				eq(expenses.groupId, groupId!),
-				eq(expenses.deleted, false)
-			))
+			.where(and(eq(expenses.id, expenseId), eq(expenses.groupId, groupId!), eq(expenses.deleted, false)))
 			.limit(1);
 
 		const expense = expenseResult[0];
@@ -439,34 +415,29 @@ async function handleDeleteCallback(ctx: MyContext) {
 		if (!isCreator && !isAdmin) {
 			const creatorName = expense.username || expense.first_name || 'Unknown';
 			await ctx.answerCallbackQuery();
-			await ctx.editMessageText(
-				`❌ Only @${creatorName} or admins can delete this expense`
-			);
+			await ctx.editMessageText(`❌ Only @${creatorName} or admins can delete this expense`);
 			return;
 		}
 
 		// Soft delete the expense
-		await db
-			.update(expenses)
-			.set({ deleted: true })
-			.where(eq(expenses.id, expenseId));
+		await db.update(expenses).set({ deleted: true }).where(eq(expenses.id, expenseId));
 
 		await ctx.editMessageText(
 			`✅ <b>Expense Deleted</b>\n\n` +
-			`"${expense.description}" - $${parseFloat(expense.amount).toFixed(2)}\n\n` +
-			`The balances have been updated.`,
+				`"${expense.description}" - $${parseFloat(expense.amount).toFixed(2)}\n\n` +
+				`The balances have been updated.`,
 			{
 				parse_mode: 'HTML',
 				reply_markup: {
 					inline_keyboard: [
 						[{ text: '📊 View Balance', callback_data: 'view_balance' }],
-						[{ text: '📜 View History', callback_data: 'view_history' }]
-					]
-				}
-			}
+						[{ text: '📜 View History', callback_data: 'view_history' }],
+					],
+				},
+			},
 		);
-	} catch (error) {
-		console.error('Error deleting expense:', error);
+	} catch {
+		logger.error('Error deleting expense');
 		await ctx.answerCallbackQuery('Error deleting expense');
 	}
 }
@@ -482,27 +453,24 @@ async function handleCategoryChange(ctx: MyContext) {
 	await ctx.answerCallbackQuery();
 
 	const categories = EXPENSE_CATEGORIES.map((cat, i) => {
-		const callbackData = returnPage !== null
-			? `setcat:${expenseId}:${i}:${returnPage}`
-			: `setcat:${expenseId}:${i}`;
+		const callbackData = returnPage !== null ? `setcat:${expenseId}:${i}:${returnPage}` : `setcat:${expenseId}:${i}`;
 		return [{ text: cat, callback_data: callbackData }];
 	});
 
 	// Add cancel button
-	categories.push([{
-		text: '❌ Cancel',
-		callback_data: returnPage !== null ? `exp_page:${returnPage}` : 'close'
-	}]);
-
-	await ctx.editMessageText(
-		'📂 <b>Select a category:</b>',
+	categories.push([
 		{
-			parse_mode: 'HTML',
-			reply_markup: {
-				inline_keyboard: categories
-			}
-		}
-	);
+			text: '❌ Cancel',
+			callback_data: returnPage !== null ? `exp_page:${returnPage}` : 'close',
+		},
+	]);
+
+	await ctx.editMessageText('📂 <b>Select a category:</b>', {
+		parse_mode: 'HTML',
+		reply_markup: {
+			inline_keyboard: categories,
+		},
+	});
 }
 
 async function handleSetCategory(ctx: MyContext) {
@@ -528,14 +496,10 @@ async function handleSetCategory(ctx: MyContext) {
 		const expenseResult = await db
 			.select({
 				description: expenses.description,
-				amount: expenses.amount
+				amount: expenses.amount,
 			})
 			.from(expenses)
-			.where(and(
-				eq(expenses.id, expenseId),
-				eq(expenses.groupId, groupId!),
-				eq(expenses.deleted, false)
-			))
+			.where(and(eq(expenses.id, expenseId), eq(expenses.groupId, groupId!), eq(expenses.deleted, false)))
 			.limit(1);
 
 		const expense = expenseResult[0];
@@ -546,27 +510,24 @@ async function handleSetCategory(ctx: MyContext) {
 		}
 
 		// Update category
-		await db
-			.update(expenses)
-			.set({ category: category })
-			.where(eq(expenses.id, expenseId));
+		await db.update(expenses).set({ category: category }).where(eq(expenses.id, expenseId));
 
 		// Update category mapping for learning
-		const descPattern = (expense.description?.toString().toLowerCase() || '');
+		const descPattern = expense.description?.toString().toLowerCase() || '';
 		await db
 			.insert(categoryMappings)
 			.values({
 				descriptionPattern: descPattern,
 				category: category,
-				confidence: '1.00'
+				confidence: '1.00',
 			})
 			.onConflictDoUpdate({
 				target: categoryMappings.descriptionPattern,
 				set: {
 					category: category,
 					usageCount: sql`${categoryMappings.usageCount} + 1`,
-					confidence: sql`MIN(1.0, ${categoryMappings.confidence} + 0.1)::decimal(3,2)`
-				}
+					confidence: sql`MIN(1.0, ${categoryMappings.confidence} + 0.1)::decimal(3,2)`,
+				},
 			});
 
 		await ctx.answerCallbackQuery(`Category updated to ${category}`);
@@ -585,14 +546,11 @@ async function handleSetCategory(ctx: MyContext) {
 					created_by: expenses.createdBy,
 					payer_username: users.username,
 					payer_first_name: users.firstName,
-					split_count: sql<number>`(SELECT COUNT(*) FROM expense_splits WHERE expense_id = ${expenses.id})`
+					split_count: sql<number>`(SELECT COUNT(*) FROM expense_splits WHERE expense_id = ${expenses.id})`,
 				})
 				.from(expenses)
 				.innerJoin(users, eq(expenses.paidBy, users.telegramId))
-				.where(and(
-					eq(expenses.groupId, groupId!),
-					eq(expenses.deleted, false)
-				))
+				.where(and(eq(expenses.groupId, groupId!), eq(expenses.deleted, false)))
 				.orderBy(desc(expenses.createdAt));
 
 			await showExpensesPage(ctx, expensesResult, returnPage);
@@ -600,8 +558,8 @@ async function handleSetCategory(ctx: MyContext) {
 			// Just delete the message
 			await ctx.deleteMessage();
 		}
-	} catch (error) {
-		console.error('Error updating category:', error);
+	} catch {
+		logger.error('Error updating category');
 		await ctx.answerCallbackQuery('Error updating category');
 	}
 }
@@ -643,15 +601,11 @@ async function handleExpenseDetails(ctx: MyContext) {
 				createdAt: expenses.createdAt,
 				notes: expenses.notes,
 				payer_username: users.username,
-				payer_first_name: users.firstName
+				payer_first_name: users.firstName,
 			})
 			.from(expenses)
 			.innerJoin(users, eq(expenses.paidBy, users.telegramId))
-			.where(and(
-				eq(expenses.id, expenseId),
-				eq(expenses.groupId, groupId!),
-				eq(expenses.deleted, false)
-			))
+			.where(and(eq(expenses.id, expenseId), eq(expenses.groupId, groupId!), eq(expenses.deleted, false)))
 			.limit(1);
 
 		const expense = expenseResult[0];
@@ -666,16 +620,16 @@ async function handleExpenseDetails(ctx: MyContext) {
 			.select({
 				amount: expenseSplits.amount,
 				username: users.username,
-				first_name: users.firstName
+				first_name: users.firstName,
 			})
 			.from(expenseSplits)
 			.innerJoin(users, eq(expenseSplits.userId, users.telegramId))
 			.where(eq(expenseSplits.expenseId, expenseId));
 
 		const payerName = expense.payer_username || expense.payer_first_name || 'Unknown';
-		const splitDetails = splitsResult.map((s) =>
-			`  • @${s.username || s.first_name || 'Unknown'}: $${parseFloat(s.amount).toFixed(2)}`
-		).join('\n');
+		const splitDetails = splitsResult
+			.map((s) => `  • @${s.username || s.first_name || 'Unknown'}: $${parseFloat(s.amount).toFixed(2)}`)
+			.join('\n');
 
 		const details =
 			`📊 <b>Expense Details</b>\n\n` +
@@ -688,8 +642,8 @@ async function handleExpenseDetails(ctx: MyContext) {
 
 		await ctx.answerCallbackQuery();
 		await ctx.reply(details, { parse_mode: 'HTML' });
-	} catch (error) {
-		console.error('Error getting expense details:', error);
+	} catch {
+		logger.error('Error getting expense details');
 		await ctx.answerCallbackQuery('Error loading details');
 	}
 }

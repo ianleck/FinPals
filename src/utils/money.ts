@@ -254,7 +254,7 @@ export function formatMoney(money: Money, currency: string = 'USD'): string {
 		style: 'currency',
 		currency: currency,
 		minimumFractionDigits: 2,
-		maximumFractionDigits: 2
+		maximumFractionDigits: 2,
 	});
 
 	return formatter.format(money.toNumber());
@@ -300,7 +300,5 @@ export function convertCurrency(amount: Money, exchangeRate: number): Money {
  */
 export function validateMoneyAmount(amount: Money): boolean {
 	// Check if positive and within reasonable range
-	return amount.isPositive() &&
-		   amount.isLessThanOrEqual(new Money(999999.99)) &&
-		   amount.isGreaterThanOrEqual(new Money(0.01));
+	return amount.isPositive() && amount.isLessThanOrEqual(new Money(999999.99)) && amount.isGreaterThanOrEqual(new Money(0.01));
 }

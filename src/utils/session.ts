@@ -1,5 +1,6 @@
 import { Bot, Context, SessionFlavor, session } from 'grammy';
 import type { DurableObjectNamespace } from '@cloudflare/workers-types';
+import { logger } from './logger';
 
 // Data persisted per-user via Durable Objects
 export interface SessionData {
@@ -48,7 +49,7 @@ export function setupSession<C extends Context & SessionFlavor<SessionData>>(bot
 						const data = await res.json<SessionData>();
 						return data;
 					} catch (error) {
-						console.error(`Error reading session: ${error}`);
+						logger.error(`Error reading session`, error);
 						// Return initial session on error to prevent undefined sessions
 						return {};
 					}
@@ -62,7 +63,7 @@ export function setupSession<C extends Context & SessionFlavor<SessionData>>(bot
 							body: JSON.stringify(value),
 						});
 					} catch (error) {
-						console.error(`Error writing session: ${error}`);
+						logger.error(`Error writing session`, error);
 					}
 				},
 				/** Delete the session inside the DO */
@@ -71,10 +72,10 @@ export function setupSession<C extends Context & SessionFlavor<SessionData>>(bot
 						const obj = env.SESSIONS.get(env.SESSIONS.idFromName(key));
 						await obj.fetch('https://do/delete', { method: 'POST' });
 					} catch (error) {
-						console.error(`Error deleting session: ${error}`);
+						logger.error(`Error deleting session`, error);
 					}
 				},
 			},
-		})
+		}),
 	);
 }

@@ -4,8 +4,8 @@ main = "src/index.ts"
 compatibility_date = "2025-05-05"
 compatibility_flags = ["nodejs_compat"]
 
-# Add your Cloudflare account ID here
-account_id = "7a041c2905e112bf0752fd7c8e577f15"
+# Cloudflare account ID - set via environment variable or --account-id flag
+# account_id = "your_account_id_here"
 
 [vars]
 # Environment configuration (this is production config)

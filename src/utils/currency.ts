@@ -1,9 +1,10 @@
 // Currency conversion utilities
 // Supports both mock rates and real-time rates from exchangerate-api.com
 
-import { eq, gt, sql } from 'drizzle-orm';
+import { eq, gt } from 'drizzle-orm';
 import type { Database } from '../db';
 import { users, exchangeRates } from '../db/schema';
+import { logger } from './logger';
 
 const MOCK_RATES: { [key: string]: number } = {
 	USD: 1,
@@ -38,8 +39,7 @@ const MOCK_RATES: { [key: string]: number } = {
 	RUB: 78.48, // Russian Ruble
 };
 
-// Cache for real-time rates
-let ratesCache: { rates: { [key: string]: number }; timestamp: number } | null = null;
+// Cache for real-time rates - removed as unused
 const CACHE_DURATION = 3600000; // 1 hour in milliseconds
 
 // Update exchange rates in database
@@ -48,7 +48,7 @@ export async function updateExchangeRatesInDB(db: Database): Promise<boolean> {
 		// Try to fetch from Frankfurter API (free, no key needed)
 		const response = await fetch('https://api.frankfurter.app/latest?from=USD');
 		if (!response.ok) {
-			console.error('Failed to fetch rates from Frankfurter:', response.statusText);
+			logger.error('Failed to fetch rates from Frankfurter', response.statusText);
 			return false;
 		}
 
@@ -62,28 +62,29 @@ export async function updateExchangeRatesInDB(db: Database): Promise<boolean> {
 
 		// Update all rates in database
 		const updatePromises = Object.entries(rates).map(([currency, rate]) =>
-			db.insert(exchangeRates)
+			db
+				.insert(exchangeRates)
 				.values({
 					currencyCode: currency,
 					rateToUsd: rate.toString(),
 					source: 'frankfurter',
-					lastUpdated: new Date()
+					lastUpdated: new Date(),
 				})
 				.onConflictDoUpdate({
 					target: exchangeRates.currencyCode,
 					set: {
 						rateToUsd: rate.toString(),
 						source: 'frankfurter',
-						lastUpdated: new Date()
-					}
-				})
+						lastUpdated: new Date(),
+					},
+				}),
 		);
 
 		await Promise.all(updatePromises);
-		console.log(`Successfully updated ${Object.keys(rates).length} exchange rates`);
+		logger.info(`Successfully updated ${Object.keys(rates).length} exchange rates`);
 		return true;
 	} catch (error) {
-		console.error('Error updating exchange rates:', error);
+		logger.error('Error updating exchange rates', error);
 		return false;
 	}
 }
@@ -93,11 +94,11 @@ export async function getExchangeRatesFromDB(db: Database): Promise<{ [key: stri
 	try {
 		const oneDayAgo = new Date();
 		oneDayAgo.setHours(oneDayAgo.getHours() - 24);
-		
+
 		const results = await db
 			.select({
 				currencyCode: exchangeRates.currencyCode,
-				rateToUsd: exchangeRates.rateToUsd
+				rateToUsd: exchangeRates.rateToUsd,
 			})
 			.from(exchangeRates)
 			.where(gt(exchangeRates.lastUpdated, oneDayAgo));
@@ -113,7 +114,7 @@ export async function getExchangeRatesFromDB(db: Database): Promise<{ [key: stri
 
 		return rates;
 	} catch (error) {
-		console.error('Error getting exchange rates from DB:', error);
+		logger.error('Error getting exchange rates from DB', error);
 		return null;
 	}
 }
@@ -150,89 +151,6 @@ export const CURRENCY_SYMBOLS: { [key: string]: string } = {
 	TRY: '₺',
 	RUB: '₽',
 };
-
-// Fetch real-time exchange rates from various free APIs
-async function fetchRealTimeRates(apiKey?: string): Promise<{ [key: string]: number } | null> {
-	try {
-		// Check cache first
-		if (ratesCache && Date.now() - ratesCache.timestamp < CACHE_DURATION) {
-			return ratesCache.rates;
-		}
-
-		// Try different free APIs in order of preference
-
-		// 1. Frankfurter API (European Central Bank data) - completely free, no key needed
-		try {
-			const response = await fetch('https://api.frankfurter.app/latest?from=USD');
-			if (response.ok) {
-				const data = (await response.json()) as any;
-				const rates: { [key: string]: number } = { USD: 1 };
-
-				// Convert the rates to USD base
-				for (const [currency, rate] of Object.entries(data.rates)) {
-					rates[currency] = rate as number;
-				}
-
-				// Cache the rates
-				ratesCache = {
-					rates,
-					timestamp: Date.now(),
-				};
-				return rates;
-			}
-		} catch (e) {
-			console.log('Frankfurter API failed, trying next...');
-		}
-
-		// 2. ExchangeRate-API (if API key provided)
-		if (apiKey) {
-			try {
-				const response = await fetch(`https://v6.exchangerate-api.com/v6/${apiKey}/latest/USD`);
-				if (response.ok) {
-					const data = (await response.json()) as any;
-					if (data.result === 'success') {
-						// Cache the rates
-						ratesCache = {
-							rates: data.conversion_rates,
-							timestamp: Date.now(),
-						};
-						return data.conversion_rates;
-					}
-				}
-			} catch (e) {
-				console.log('ExchangeRate-API failed, trying next...');
-			}
-		}
-
-		// 3. Fixer.io free tier (requires free API key, 100 requests/month)
-		// Uncomment and add your key if you want to use this
-		// const fixerKey = 'YOUR_FIXER_API_KEY';
-		// try {
-		//   const response = await fetch(`http://data.fixer.io/api/latest?access_key=${fixerKey}&base=EUR`);
-		//   if (response.ok) {
-		//     const data = await response.json();
-		//     if (data.success) {
-		//       // Convert from EUR base to USD base
-		//       const usdRate = data.rates.USD;
-		//       const rates: { [key: string]: number } = {};
-		//       for (const [currency, rate] of Object.entries(data.rates)) {
-		//         rates[currency] = (rate as number) / usdRate;
-		//       }
-		//       rates.USD = 1;
-		//       ratesCache = { rates, timestamp: Date.now() };
-		//       return rates;
-		//     }
-		//   }
-		// } catch (e) {
-		//   console.log('Fixer.io failed');
-		// }
-
-		return null;
-	} catch (error) {
-		console.error('Error fetching exchange rates:', error);
-		return null;
-	}
-}
 
 export async function convertCurrency(amount: number, from: string, to: string, db?: Database): Promise<number> {
 	// Try to get rates from database first
@@ -345,18 +263,11 @@ export function parseCurrencyFromText(text: string): { amount: number; currency:
 
 // Get user's preferred currency from database or default
 export async function getUserCurrency(db: Database, userId: string): Promise<string> {
-	const user = await db
-		.select({ preferredCurrency: users.preferredCurrency })
-		.from(users)
-		.where(eq(users.telegramId, userId))
-		.limit(1);
+	const user = await db.select({ preferredCurrency: users.preferredCurrency }).from(users).where(eq(users.telegramId, userId)).limit(1);
 	return user[0]?.preferredCurrency || 'USD';
 }
 
 // Set user's preferred currency
 export async function setUserCurrency(db: Database, userId: string, currency: string): Promise<void> {
-	await db
-		.update(users)
-		.set({ preferredCurrency: currency })
-		.where(eq(users.telegramId, userId));
+	await db.update(users).set({ preferredCurrency: currency }).where(eq(users.telegramId, userId));
 }

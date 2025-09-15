@@ -5,7 +5,7 @@ declare namespace Cloudflare {
 	interface Env {
 		ENV: "development" | "production" | "test";
 		BOT_TOKEN: "7594760757:AAEwF9t5xOYzUmIRN8np8647PKMHKblSRv8";
-		TELEGRAM_BOT_API_SECRET_TOKEN: "3C2BE62791F90E6561D4BFBBCF7242DF526BF39E0B925BE485A8FF0F1C96CB24";
+		TELEGRAM_BOT_API_SECRET_TOKEN: string;
 		SESSIONS: DurableObjectNamespace<import("./src/index").SessionDO>;
 		DB: D1Database;
 	}

@@ -1,12 +1,6 @@
 import { Context } from 'grammy';
 import { ERROR_MESSAGES } from './constants';
-
-export class BotError extends Error {
-	constructor(message: string, public code: string, public userMessage: string = ERROR_MESSAGES.DATABASE_ERROR) {
-		super(message);
-		this.name = 'BotError';
-	}
-}
+import { logger } from './logger';
 
 // PostgreSQL/CockroachDB error codes
 const PG_ERROR_CODES = {
@@ -21,11 +15,12 @@ const PG_ERROR_CODES = {
 export async function withErrorHandler<T>(ctx: Context, operation: () => Promise<T>, errorMessage?: string): Promise<T | void> {
 	try {
 		return await operation();
-	} catch (error: any) {
-		console.error('Error in operation:', error);
+	} catch (error) {
+		logger.error('Error in operation', error);
 
 		// Handle PostgreSQL/CockroachDB specific error types
-		switch (error.code) {
+		const errorCode = (error as any)?.code;
+		switch (errorCode) {
 			case PG_ERROR_CODES.UNIQUE_VIOLATION:
 				await ctx.reply('❌ This operation would create a duplicate entry.');
 				break;

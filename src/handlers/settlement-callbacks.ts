@@ -5,9 +5,10 @@
 
 import { Bot, Context } from 'grammy';
 import { eq, and, or, sql } from 'drizzle-orm';
-import { createDb, type Database, withRetry } from '../db';
-import { settlements, users, expenses, expenseSplits } from '../db/schema';
+import { createDb, withRetry } from '../db';
+import { settlements, users } from '../db/schema';
 import { getFirstResult } from '../utils/db-helpers';
+import { logger } from '../utils/logger';
 import { handleBalance } from '../commands/balance';
 import { handleSettleCallback, showUnsettledBalances } from '../commands/settle';
 import type { Env } from '../index';
@@ -57,10 +58,10 @@ async function handleSimplifyDebts(ctx: MyContext) {
 
 		await ctx.reply(message, {
 			parse_mode: 'HTML',
-			reply_markup: { inline_keyboard: buttons }
+			reply_markup: { inline_keyboard: buttons },
 		});
 	} catch (error) {
-		console.error('Error simplifying debts:', error);
+		logger.error('Error simplifying debts', error);
 		await ctx.reply('❌ Error calculating simplified settlements.');
 	}
 }
@@ -69,11 +70,11 @@ async function handleSettleHelp(ctx: MyContext) {
 	await ctx.answerCallbackQuery();
 	await ctx.reply(
 		'💸 <b>Recording Settlements</b>\n\n' +
-		'Use: <code>/settle @username [amount]</code>\n\n' +
-		'This records that you paid the mentioned user.\n\n' +
-		'Example: <code>/settle @john 25</code>\n' +
-		'This means you paid John $25.',
-		{ parse_mode: 'HTML' }
+			'Use: <code>/settle @username [amount]</code>\n\n' +
+			'This records that you paid the mentioned user.\n\n' +
+			'Example: <code>/settle @john 25</code>\n' +
+			'This means you paid John $25.',
+		{ parse_mode: 'HTML' },
 	);
 }
 
@@ -122,7 +123,7 @@ async function handlePartialPayment(ctx: MyContext) {
 		fromUser: owerId,
 		toUser: owedId,
 		amount: amount.toString(),
-		createdBy: ctx.from!.id.toString()
+		createdBy: ctx.from!.id.toString(),
 	});
 
 	// Get usernames
@@ -130,16 +131,13 @@ async function handlePartialPayment(ctx: MyContext) {
 		.select({
 			telegram_id: users.telegramId,
 			username: users.username,
-			first_name: users.firstName
+			first_name: users.firstName,
 		})
 		.from(users)
-		.where(or(
-			eq(users.telegramId, owerId),
-			eq(users.telegramId, owedId)
-		));
+		.where(or(eq(users.telegramId, owerId), eq(users.telegramId, owedId)));
 
-	const owerUser = usersResult.find(u => u.telegram_id === owerId);
-	const owedUser = usersResult.find(u => u.telegram_id === owedId);
+	const owerUser = usersResult.find((u) => u.telegram_id === owerId);
+	const owedUser = usersResult.find((u) => u.telegram_id === owedId);
 
 	const owerName = owerUser?.username || owerUser?.first_name || 'User';
 	const owedName = owedUser?.username || owedUser?.first_name || 'User';
@@ -182,7 +180,7 @@ async function handlePartialPayment(ctx: MyContext) {
 
 	const remainingBalance = getFirstResult<any>(remainingBalanceResult);
 
-	const remaining = Math.abs(remainingBalance?.net_balance as number || 0);
+	const remaining = Math.abs((remainingBalance?.net_balance as number) || 0);
 
 	let message = `💵 <b>Partial Payment Recorded</b>\n\n`;
 	message += `@${owerName} paid @${owedName}: <b>$${amount.toFixed(2)}</b>\n\n`;
@@ -196,10 +194,8 @@ async function handlePartialPayment(ctx: MyContext) {
 	await ctx.editMessageText(message, {
 		parse_mode: 'HTML',
 		reply_markup: {
-			inline_keyboard: [[
-				{ text: '📊 View All Balances', callback_data: 'view_balance' }
-			]]
-		}
+			inline_keyboard: [[{ text: '📊 View All Balances', callback_data: 'view_balance' }]],
+		},
 	});
 
 	// Send notification
@@ -207,10 +203,10 @@ async function handlePartialPayment(ctx: MyContext) {
 		await ctx.api.sendMessage(
 			owedId,
 			`💵 <b>Partial Payment Received!</b>\n\n` +
-			`@${owerName} paid you <b>$${amount.toFixed(2)}</b>\n` +
-			`Group: ${ctx.chat?.title || 'your group'}\n` +
-			`Remaining: $${remaining.toFixed(2)}`,
-			{ parse_mode: 'HTML' }
+				`@${owerName} paid you <b>$${amount.toFixed(2)}</b>\n` +
+				`Group: ${ctx.chat?.title || 'your group'}\n` +
+				`Remaining: $${remaining.toFixed(2)}`,
+			{ parse_mode: 'HTML' },
 		);
 	} catch {
 		// User might have blocked the bot
@@ -234,7 +230,7 @@ async function handlePartialCustom(ctx: MyContext) {
 		const userResult = await db
 			.select({
 				username: users.username,
-				first_name: users.firstName
+				first_name: users.firstName,
 			})
 			.from(users)
 			.where(eq(users.telegramId, toUserId))

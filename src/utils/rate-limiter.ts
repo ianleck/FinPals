@@ -1,3 +1,5 @@
+import { logger } from './logger';
+
 interface RateLimitSuccessResponse {
 	message: string;
 	time: string;
@@ -5,14 +7,6 @@ interface RateLimitSuccessResponse {
 
 interface RateLimitErrorResponse {
 	error: string;
-}
-
-type RateLimitResponse = RateLimitSuccessResponse | RateLimitErrorResponse;
-
-interface RateLimitHeaders {
-	'x-ratelimit-limit': string;
-	'x-ratelimit-remaining': string;
-	'x-ratelimit-reset': string;
 }
 
 const rateLimitMessages = {
@@ -50,7 +44,6 @@ export class RateLimiter {
 		this.config = config;
 		this.enabled = config.FEATURE_ENABLE_RATE_LIMITER?.toLowerCase() === 'true';
 		this.baseUrl = config.RATE_LIMITER_URL;
-		
 	}
 
 	async checkRateLimit(userId: number, languageCode: string = 'en'): Promise<{ allowed: boolean; message?: string }> {
@@ -72,15 +65,15 @@ export class RateLimiter {
 				// If we get a 429 Too Many Requests, we should rate limit
 				if (response.status === 429) {
 					const message = this.getRateLimitMessage(languageCode);
-					console.warn(`Rate limiter: User ${userId} was rate limited (Status: 429, Language: ${languageCode})`);
+					logger.warn(`Rate limiter: User ${userId} was rate limited (Status: 429, Language: ${languageCode}`);
 					return { allowed: false, message };
 				}
 
 				// Log other error responses but allow the request
-				console.error('Rate limiter service error:', {
+				logger.error('Rate limiter service error', {
 					status: response.status,
 					statusText: response.statusText,
-					userId
+					userId,
 				});
 				return { allowed: true };
 			}
@@ -90,7 +83,7 @@ export class RateLimiter {
 			try {
 				data = await response.json();
 			} catch (error) {
-				console.error('Failed to parse rate limiter response:', error);
+				logger.error('Failed to parse rate limiter response', error);
 				return { allowed: true };
 			}
 
@@ -105,15 +98,15 @@ export class RateLimiter {
 			// If we have an error response, user is rate limited
 			if (this.isErrorResponse(data)) {
 				const message = this.getRateLimitMessage(languageCode);
-				console.warn(`Rate limiter: User ${userId} was rate limited (Language: ${languageCode})`);
+				logger.warn(`Rate limiter: User ${userId} was rate limited (Language: ${languageCode}`);
 				return { allowed: false, message };
 			}
 
 			// Invalid response structure
-			console.error('Invalid rate limit response structure:', data);
+			logger.error('Invalid rate limit response structure', data);
 			return { allowed: true };
 		} catch (error) {
-			console.error('Rate limiter error:', error);
+			logger.error('Rate limiter error', error);
 			return { allowed: true };
 		}
 	}
@@ -130,12 +123,7 @@ export class RateLimiter {
 	}
 
 	private isErrorResponse(data: unknown): data is RateLimitErrorResponse {
-		return (
-			typeof data === 'object' &&
-			data !== null &&
-			'error' in data &&
-			typeof (data as RateLimitErrorResponse).error === 'string'
-		);
+		return typeof data === 'object' && data !== null && 'error' in data && typeof (data as RateLimitErrorResponse).error === 'string';
 	}
 
 	private processRateLimitHeaders(headers: Headers): void {
@@ -144,7 +132,7 @@ export class RateLimiter {
 		const reset = headers.get('x-ratelimit-reset');
 
 		if (limit && remaining && reset) {
-			console.debug('Rate limit headers:', { limit, remaining, reset });
+			logger.debug('Rate limit headers', { limit, remaining, reset });
 		}
 	}
 

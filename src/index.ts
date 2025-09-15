@@ -3,13 +3,12 @@
  * Handles webhook routing and bot initialization
  */
 
-import { Bot, Context, SessionFlavor, webhookCallback } from 'grammy';
-import { setupSession } from './utils/session';
+import { Bot, Context, webhookCallback } from 'grammy';
 import type { DurableObjectNamespace } from '@cloudflare/workers-types';
 import { createDb } from './db';
-import type { SessionData } from './utils/session';
 import { COMMANDS } from './utils/constants';
 import { trackGroupMetadata } from './utils/group-tracker';
+import { logger } from './utils/logger';
 
 // Import command handlers
 import { handleStart } from './commands/start';
@@ -29,7 +28,7 @@ import { registerExpenseCallbacks } from './handlers/expense-callbacks';
 import { registerSettlementCallbacks } from './handlers/settlement-callbacks';
 import { registerNavigationCallbacks } from './handlers/navigation-callbacks';
 
-type MyContext = Context & SessionFlavor<SessionData> & { env: Env };
+type MyContext = Context & { env: Env };
 
 export interface Env {
 	BOT_TOKEN: string;
@@ -73,16 +72,13 @@ const worker = {
 		try {
 			const bot = new Bot<MyContext>(env.BOT_TOKEN);
 
-			// Set up session middleware
-			setupSession(bot, env);
-
 			// Track group metadata
 			bot.use(async (ctx, next) => {
 				ctx.env = env;
 				try {
 					await trackGroupMetadata(ctx);
 				} catch (error) {
-					console.error('Error tracking group metadata:', error);
+					logger.error('Error tracking group metadata', error);
 				}
 				return next();
 			});
@@ -131,17 +127,12 @@ const worker = {
 				headers: newHeaders,
 			});
 		} catch (error) {
-			console.error('Error in bot:', error);
+			logger.error('Error in bot', error);
 			return new Response('FinPals - Telegram Expense Splitting Bot', {
 				status: 200,
 				headers: { ...corsHeaders, 'content-type': 'text/plain' },
 			});
 		}
-	},
-
-	async scheduled(_event: ScheduledEvent, _env: Env, _ctx: ExecutionContext): Promise<void> {
-		// Scheduled tasks deprecated with CockroachDB migration
-		console.log('Scheduled task triggered - no actions taken (deprecated)');
 	},
 };
 
@@ -176,7 +167,7 @@ function registerTextHandlers(bot: Bot<MyContext>, db: any) {
 			// Create fake callback context
 			ctx.callbackQuery = {
 				data: `exp:0:${expenseId}`,
-				message: ctx.message
+				message: ctx.message,
 			} as any;
 			await handleExpenseSelection(ctx, db);
 		}
@@ -199,8 +190,6 @@ async function handleSetCommands(env: Env): Promise<Response> {
 			{ command: COMMANDS.EXPENSES, description: 'List all expenses' },
 			{ command: COMMANDS.EDIT, description: 'Edit an expense' },
 			{ command: COMMANDS.DELETE, description: 'Delete an expense' },
-			{ command: COMMANDS.CATEGORY, description: 'Update expense category' },
-			{ command: COMMANDS.HELP, description: 'Show all available commands' },
 			{ command: COMMANDS.INFO, description: 'Get detailed help for a command' },
 		];
 
@@ -216,12 +205,11 @@ async function handleSetCommands(env: Env): Promise<Response> {
 				{ command: COMMANDS.ADD, description: 'Add a personal expense' },
 				{ command: COMMANDS.EXPENSES, description: 'View your expenses' },
 				{ command: COMMANDS.STATS, description: 'View statistics' },
-				{ command: COMMANDS.HELP, description: 'Show available commands' },
 				{ command: COMMANDS.INFO, description: 'Get detailed help for a command' },
 			],
 			{
 				scope: { type: 'all_private_chats' },
-			}
+			},
 		);
 
 		return new Response(JSON.stringify({ success: true, message: 'Commands set successfully' }), {
@@ -229,7 +217,7 @@ async function handleSetCommands(env: Env): Promise<Response> {
 			headers: { ...corsHeaders, 'content-type': 'application/json' },
 		});
 	} catch (error: any) {
-		console.error('Error setting commands:', error);
+		logger.error('Error setting commands', error);
 		return new Response(
 			JSON.stringify({
 				success: false,
@@ -238,7 +226,7 @@ async function handleSetCommands(env: Env): Promise<Response> {
 			{
 				status: 500,
 				headers: { ...corsHeaders, 'content-type': 'application/json' },
-			}
+			},
 		);
 	}
 }

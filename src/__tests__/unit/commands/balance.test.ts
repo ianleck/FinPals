@@ -11,7 +11,7 @@ describe('Balance Command', () => {
 		});
 
 		it('should identify who owes whom', () => {
-			const balance1 = new Money(50);  // Person owes
+			const balance1 = new Money(50); // Person owes
 			const balance2 = new Money(-50); // Person is owed
 
 			expect(balance1.isPositive()).toBe(true);

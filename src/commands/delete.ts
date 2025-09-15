@@ -3,6 +3,7 @@ import { eq, and, desc } from 'drizzle-orm';
 import { type Database, withRetry, parseDecimal } from '../db';
 import { expenses, users } from '../db/schema';
 import { ERROR_MESSAGES } from '../utils/constants';
+import { logger } from '../utils/logger';
 
 export async function handleDelete(ctx: Context, db: Database) {
 	// Only work in group chats
@@ -30,16 +31,11 @@ export async function handleDelete(ctx: Context, db: Database) {
 						currency: expenses.currency,
 						createdAt: expenses.createdAt,
 						username: users.username,
-						firstName: users.firstName
+						firstName: users.firstName,
 					})
 					.from(expenses)
 					.innerJoin(users, eq(expenses.createdBy, users.telegramId))
-					.where(
-						and(
-							eq(expenses.groupId, groupId),
-							eq(expenses.deleted, false)
-						)
-					)
+					.where(and(eq(expenses.groupId, groupId), eq(expenses.deleted, false)))
 					.orderBy(desc(expenses.createdAt))
 					.limit(10);
 			});
@@ -61,25 +57,27 @@ export async function handleDelete(ctx: Context, db: Database) {
 			// Format the list of recent expenses
 			let message = '🗑️ <b>Select an expense to delete:</b>\n\n';
 			const buttons: any[][] = [];
-			
+
 			recentExpenses.forEach((expense) => {
 				const creatorName = expense.username ? `@${expense.username}` : expense.firstName || 'Unknown';
 				const date = new Date(expense.createdAt).toLocaleDateString();
 				const canDelete = expense.createdBy === userId || isAdmin;
 				const deleteIcon = canDelete ? ' ✅' : '';
 				const amount = parseDecimal(expense.amount);
-				
+
 				message += `<code>${expense.id}</code> - ${expense.description}\n`;
 				message += `   💰 ${expense.currency}${amount.toFixed(2)} by ${creatorName}${deleteIcon}\n`;
 				message += `   📅 ${date}\n\n`;
-				
+
 				// Add delete button if user can delete this expense
 				if (canDelete) {
 					const desc = expense.description || 'No description';
-					buttons.push([{
-						text: `🗑️ ${expense.id}: ${desc.substring(0, 20)}${desc.length > 20 ? '...' : ''}`,
-						callback_data: `delete_${expense.id}`
-					}]);
+					buttons.push([
+						{
+							text: `🗑️ ${expense.id}: ${desc.substring(0, 20)}${desc.length > 20 ? '...' : ''}`,
+							callback_data: `delete_${expense.id}`,
+						},
+					]);
 				}
 			});
 
@@ -89,14 +87,14 @@ export async function handleDelete(ctx: Context, db: Database) {
 			const replyOptions: any = { parse_mode: 'HTML' };
 			if (buttons.length > 0) {
 				replyOptions.reply_markup = {
-					inline_keyboard: buttons
+					inline_keyboard: buttons,
 				};
 			}
 
 			await ctx.reply(message, replyOptions);
 			return;
 		} catch (error) {
-			console.error('Error fetching recent expenses:', error);
+			logger.error('Error fetching recent expenses', error);
 			await ctx.reply(ERROR_MESSAGES.DATABASE_ERROR);
 			return;
 		}
@@ -114,17 +112,11 @@ export async function handleDelete(ctx: Context, db: Database) {
 					amount: expenses.amount,
 					createdBy: expenses.createdBy,
 					username: users.username,
-					firstName: users.firstName
+					firstName: users.firstName,
 				})
 				.from(expenses)
 				.innerJoin(users, eq(expenses.createdBy, users.telegramId))
-				.where(
-					and(
-						eq(expenses.id, expenseId),
-						eq(expenses.groupId, groupId),
-						eq(expenses.deleted, false)
-					)
-				)
+				.where(and(eq(expenses.id, expenseId), eq(expenses.groupId, groupId), eq(expenses.deleted, false)))
 				.limit(1);
 			return result[0];
 		});
@@ -147,37 +139,30 @@ export async function handleDelete(ctx: Context, db: Database) {
 
 		if (!isCreator && !isAdmin) {
 			const creatorName = expense.username || expense.firstName || 'Unknown';
-			await ctx.reply(
-				`❌ Only @${creatorName} (who created this expense) or group admins can delete it.`
-			);
+			await ctx.reply(`❌ Only @${creatorName} (who created this expense) or group admins can delete it.`);
 			return;
 		}
 
 		// Soft delete the expense
 		await withRetry(async () => {
-			await db
-				.update(expenses)
-				.set({ deleted: true })
-				.where(eq(expenses.id, expenseId));
+			await db.update(expenses).set({ deleted: true }).where(eq(expenses.id, expenseId));
 		});
 
 		const amount = parseDecimal(expense.amount);
 		await ctx.reply(
-			`✅ <b>Expense Deleted</b>\n\n` +
-			`"${expense.description}" - $${amount.toFixed(2)}\n\n` +
-			`The balances have been updated.`,
+			`✅ <b>Expense Deleted</b>\n\n` + `"${expense.description}" - $${amount.toFixed(2)}\n\n` + `The balances have been updated.`,
 			{
 				parse_mode: 'HTML',
 				reply_markup: {
 					inline_keyboard: [
 						[{ text: '📊 View Balance', callback_data: 'view_balance' }],
-						[{ text: '📜 View History', callback_data: 'view_history' }]
-					]
-				}
-			}
+						[{ text: '📜 View History', callback_data: 'view_history' }],
+					],
+				},
+			},
 		);
 	} catch (error) {
-		console.error('Error deleting expense:', error);
+		logger.error('Error deleting expense', error);
 		await ctx.reply(ERROR_MESSAGES.DATABASE_ERROR);
 	}
 }

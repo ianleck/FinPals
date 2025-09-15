@@ -10,16 +10,10 @@ import { formatCurrency } from '../utils/currency';
 import { createExpenseActionButtons } from '../utils/button-helpers';
 import { Money, parseMoney } from '../utils/money';
 
-const WARNINGS = {
-	NOT_ENROLLED: (mention: string) => `\n⚠️ ${mention} will be notified when they start using FinPals`,
-	AUTO_INCLUDED: '\n💡 You were included in the split (add yourself to mentions to customize your share)',
-	NOT_INCLUDED: '\n💡 You were not included in this split'
-};
-
 // Simple categorization function
-function suggestCategory(description: string, amount?: number): string | null {
+function suggestCategory(description: string): string | null {
 	const lowerDesc = description.toLowerCase();
-	
+
 	// Check for emojis first
 	const emojiCategories: { [key: string]: string } = {
 		'🍕🍔🍟🌮🍜🍱🍝🥘🍳☕': 'Food & Dining',
@@ -29,11 +23,11 @@ function suggestCategory(description: string, amount?: number): string | null {
 		'🏠💡💧📱💻🔌': 'Bills & Utilities',
 		'🏨🏖️✈️🗺️🎒': 'Travel',
 		'💊💉🏥👨‍⚕️': 'Healthcare',
-		'📚📖✏️🎓': 'Education'
+		'📚📖✏️🎓': 'Education',
 	};
-	
+
 	for (const [emojis, category] of Object.entries(emojiCategories)) {
-		if ([...description].some(char => emojis.includes(char))) {
+		if ([...description].some((char) => emojis.includes(char))) {
 			return category;
 		}
 	}
@@ -41,13 +35,13 @@ function suggestCategory(description: string, amount?: number): string | null {
 	// Simple keyword matching
 	const categoryKeywords: { [key: string]: string[] } = {
 		'Food & Dining': ['lunch', 'dinner', 'breakfast', 'food', 'meal', 'restaurant', 'cafe', 'coffee', 'pizza'],
-		'Transportation': ['uber', 'lyft', 'taxi', 'gas', 'fuel', 'parking', 'bus', 'train', 'flight'],
-		'Entertainment': ['movie', 'concert', 'game', 'ticket', 'show', 'netflix', 'spotify'],
-		'Shopping': ['amazon', 'store', 'buy', 'purchase', 'clothes', 'shoes', 'gift'],
+		Transportation: ['uber', 'lyft', 'taxi', 'gas', 'fuel', 'parking', 'bus', 'train', 'flight'],
+		Entertainment: ['movie', 'concert', 'game', 'ticket', 'show', 'netflix', 'spotify'],
+		Shopping: ['amazon', 'store', 'buy', 'purchase', 'clothes', 'shoes', 'gift'],
 		'Bills & Utilities': ['rent', 'electricity', 'water', 'internet', 'phone', 'bill'],
-		'Travel': ['hotel', 'airbnb', 'booking', 'trip', 'vacation', 'travel'],
-		'Healthcare': ['doctor', 'medicine', 'pharmacy', 'hospital', 'clinic'],
-		'Education': ['book', 'course', 'class', 'tuition', 'school']
+		Travel: ['hotel', 'airbnb', 'booking', 'trip', 'vacation', 'travel'],
+		Healthcare: ['doctor', 'medicine', 'pharmacy', 'hospital', 'clinic'],
+		Education: ['book', 'course', 'class', 'tuition', 'school'],
 	};
 
 	for (const [category, keywords] of Object.entries(categoryKeywords)) {
@@ -74,23 +68,22 @@ export async function handleAdd(ctx: Context, db: Database) {
 	const message = ctx.message?.text || '';
 	const hasQuotes = message.includes('"') || message.includes("'");
 	const { cleanedText, note } = hasQuotes ? extractNote(message) : { cleanedText: message, note: null };
-	const args = cleanedText.split(' ').filter(s => s.length > 0).slice(1);
+	const args = cleanedText
+		.split(' ')
+		.filter((s) => s.length > 0)
+		.slice(1);
 
 	// Validate basic format
 	if (args.length < 2) {
 		const usage = isPersonal
-			? '❌ Invalid format!\n\n' +
-			  'Usage: /add [amount] [description]\n' +
-			  'Examples:\n' +
-			  '• /add 120 lunch\n' +
-			  '• /add 50 groceries'
+			? '❌ Invalid format!\n\n' + 'Usage: /add [amount] [description]\n' + 'Examples:\n' + '• /add 120 lunch\n' + '• /add 50 groceries'
 			: '❌ Invalid format!\n\n' +
-			  'Usage: /add [amount] [description] [@mentions]\n' +
-			  'Examples:\n' +
-			  '• /add 120 lunch - Split evenly with all\n' +
-			  '• /add 120 lunch @john @sarah - Split evenly\n' +
-			  '• /add 120 lunch @john=50 @sarah=70 - Fixed amounts';
-		
+				'Usage: /add [amount] [description] [@mentions]\n' +
+				'Examples:\n' +
+				'• /add 120 lunch - Split evenly with all\n' +
+				'• /add 120 lunch @john @sarah - Split evenly\n' +
+				'• /add 120 lunch @john=50 @sarah=70 - Fixed amounts';
+
 		await replyAndCleanup(ctx, usage, { parse_mode: 'HTML' }, MESSAGE_LIFETIMES.ERROR);
 		return;
 	}
@@ -128,11 +121,7 @@ export async function handleAdd(ctx: Context, db: Database) {
 		// Start a transaction
 		const result = await withRetry(async () => {
 			// Ensure user exists
-			const existingUser = await db
-				.select()
-				.from(users)
-				.where(eq(users.telegramId, userId))
-				.limit(1);
+			const existingUser = await db.select().from(users).where(eq(users.telegramId, userId)).limit(1);
 
 			if (existingUser.length === 0) {
 				await db.insert(users).values({
@@ -145,11 +134,7 @@ export async function handleAdd(ctx: Context, db: Database) {
 
 			// For group expenses, ensure group exists
 			if (!isPersonal && groupId) {
-				const existingGroup = await db
-					.select()
-					.from(groups)
-					.where(eq(groups.telegramId, groupId))
-					.limit(1);
+				const existingGroup = await db.select().from(groups).where(eq(groups.telegramId, groupId)).limit(1);
 
 				if (existingGroup.length === 0) {
 					await db.insert(groups).values({
@@ -162,12 +147,7 @@ export async function handleAdd(ctx: Context, db: Database) {
 				const membership = await db
 					.select()
 					.from(groupMembers)
-					.where(
-						and(
-							eq(groupMembers.groupId, groupId),
-							eq(groupMembers.userId, userId)
-						)
-					)
+					.where(and(eq(groupMembers.groupId, groupId), eq(groupMembers.userId, userId)))
 					.limit(1);
 
 				if (membership.length === 0) {
@@ -192,7 +172,7 @@ export async function handleAdd(ctx: Context, db: Database) {
 				} catch (error: any) {
 					throw new Error(`Split parsing error: ${error.message}`);
 				}
-				
+
 				const { mentions, paidBy: paidByMention } = parsedSplits;
 				let paidBy = userId; // Default to message sender
 
@@ -203,12 +183,7 @@ export async function handleAdd(ctx: Context, db: Database) {
 						.select()
 						.from(users)
 						.innerJoin(groupMembers, eq(users.telegramId, groupMembers.userId))
-						.where(
-							and(
-								eq(groupMembers.groupId, groupId!),
-								eq(users.username, paidByUsername)
-							)
-						)
+						.where(and(eq(groupMembers.groupId, groupId!), eq(users.username, paidByUsername)))
 						.limit(1);
 
 					if (paidByUser.length > 0) {
@@ -222,18 +197,13 @@ export async function handleAdd(ctx: Context, db: Database) {
 					const members = await db
 						.select({ userId: groupMembers.userId })
 						.from(groupMembers)
-						.where(
-							and(
-								eq(groupMembers.groupId, groupId!),
-								eq(groupMembers.active, true)
-							)
-						);
+						.where(and(eq(groupMembers.groupId, groupId!), eq(groupMembers.active, true)));
 
 					if (members.length > 0) {
 						const splitAmounts = amount.splitEvenly(members.length);
 						participants = members.map((m, index) => ({
 							userId: m.userId,
-							splitAmount: splitAmounts[index]
+							splitAmount: splitAmounts[index],
 						}));
 					} else {
 						// Fallback to just the payer
@@ -241,65 +211,63 @@ export async function handleAdd(ctx: Context, db: Database) {
 					}
 				} else {
 					// Process mentioned users
-					const usernames = mentions.map(m => m.substring(1).split('=')[0]);
+					const usernames = mentions.map((m) => m.substring(1).split('=')[0]);
 					const mentionedUsers = await db
-						.select({ 
+						.select({
 							telegramId: users.telegramId,
-							username: users.username 
+							username: users.username,
 						})
 						.from(users)
 						.innerJoin(groupMembers, eq(users.telegramId, groupMembers.userId))
-						.where(
-							and(
-								eq(groupMembers.groupId, groupId!),
-								usernames.length > 0 ? inArray(users.username, usernames) : sql`1=0`
-							)
-						);
+						.where(and(eq(groupMembers.groupId, groupId!), usernames.length > 0 ? inArray(users.username, usernames) : sql`1=0`));
 
 					// Calculate splits for found users
 					const participantCount = mentionedUsers.length || 1;
 					let splitAmounts = amount.splitEvenly(participantCount);
 					participants = mentionedUsers.map((u, index) => ({
 						userId: u.telegramId,
-						splitAmount: splitAmounts[index]
+						splitAmount: splitAmounts[index],
 					}));
 
 					// Always include the payer if not already included
-					if (!participants.some(p => p.userId === paidBy)) {
+					if (!participants.some((p) => p.userId === paidBy)) {
 						participants.push({ userId: paidBy, splitAmount: new Money(0) });
 						// Recalculate splits with new participant count
 						splitAmounts = amount.splitEvenly(participants.length);
 						participants = participants.map((p, index) => ({
 							...p,
-							splitAmount: splitAmounts[index]
+							splitAmount: splitAmounts[index],
 						}));
 					}
 				}
 
 				// Update the expense creation to use correct paidBy
-				const category = suggestCategory(description, amount.toNumber());
+				const category = suggestCategory(description);
 
 				// Create the expense record
-				const [expense] = await db.insert(expenses).values({
-					groupId: isPersonal ? null : groupId,
-					amount: amount.toDatabase(),
-					currency: 'USD',
-					description: description,
-					category: category,
-					paidBy: paidBy, // Use the determined paidBy (could be different from userId)
-					createdBy: userId,
-					isPersonal: isPersonal,
-					notes: note
-				}).returning();
+				const [expense] = await db
+					.insert(expenses)
+					.values({
+						groupId: isPersonal ? null : groupId,
+						amount: amount.toDatabase(),
+						currency: 'USD',
+						description: description,
+						category: category,
+						paidBy: paidBy, // Use the determined paidBy (could be different from userId)
+						createdBy: userId,
+						isPersonal: isPersonal,
+						notes: note,
+					})
+					.returning();
 
 				// Create expense splits
 				if (participants.length > 0) {
 					await db.insert(expenseSplits).values(
-						participants.map(p => ({
+						participants.map((p) => ({
 							expenseId: expense.id,
 							userId: p.userId,
-							amount: p.splitAmount.toDatabase()
-						}))
+							amount: p.splitAmount.toDatabase(),
+						})),
 					);
 				}
 
@@ -308,25 +276,28 @@ export async function handleAdd(ctx: Context, db: Database) {
 
 			// For personal expenses, create the expense
 			if (isPersonal) {
-				const category = suggestCategory(description, amount.toNumber());
+				const category = suggestCategory(description);
 
-				const [expense] = await db.insert(expenses).values({
-					groupId: null,
-					amount: amount.toDatabase(),
-					currency: 'USD',
-					description: description,
-					category: category,
-					paidBy: userId,
-					createdBy: userId,
-					isPersonal: true,
-					notes: note
-				}).returning();
+				const [expense] = await db
+					.insert(expenses)
+					.values({
+						groupId: null,
+						amount: amount.toDatabase(),
+						currency: 'USD',
+						description: description,
+						category: category,
+						paidBy: userId,
+						createdBy: userId,
+						isPersonal: true,
+						notes: note,
+					})
+					.returning();
 
 				// Create single split for personal expense
 				await db.insert(expenseSplits).values({
 					expenseId: expense.id,
 					userId: userId,
-					amount: amount.toDatabase()
+					amount: amount.toDatabase(),
 				});
 
 				return expense;
@@ -337,13 +308,15 @@ export async function handleAdd(ctx: Context, db: Database) {
 		let message = '';
 		const currency = 'USD'; // TODO: Get from group or user settings
 		if (isPersonal) {
-			message = `✅ Personal expense added!\n\n` +
+			message =
+				`✅ Personal expense added!\n\n` +
 				`💰 Amount: ${formatCurrency(amount.toNumber(), currency)}\n` +
 				`📝 Description: ${description}\n` +
 				`${note ? `📌 Note: ${note}\n` : ''}`;
 		} else {
 			const participantCount = result ? 1 : 0; // Simplified for now
-			message = `✅ Expense added successfully!\n\n` +
+			message =
+				`✅ Expense added successfully!\n\n` +
 				`💰 Amount: ${formatCurrency(amount.toNumber(), currency)}\n` +
 				`📝 Description: ${description}\n` +
 				`👥 Split between ${participantCount} people\n` +
@@ -355,15 +328,9 @@ export async function handleAdd(ctx: Context, db: Database) {
 
 		await ctx.reply(message, {
 			parse_mode: 'HTML',
-			reply_markup: buttons ? { inline_keyboard: buttons } : undefined
+			reply_markup: buttons ? { inline_keyboard: buttons } : undefined,
 		});
-
 	} catch (error: any) {
-		await replyAndCleanup(
-			ctx,
-			`❌ Error adding expense: ${error.message}`,
-			{},
-			MESSAGE_LIFETIMES.ERROR
-		);
+		await replyAndCleanup(ctx, `❌ Error adding expense: ${error.message}`, {}, MESSAGE_LIFETIMES.ERROR);
 	}
 }

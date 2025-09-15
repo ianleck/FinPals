@@ -1,8 +1,7 @@
 import { Context } from 'grammy';
-import { eq, and, sql, desc, isNull } from 'drizzle-orm';
+import { eq, and, sql, desc } from 'drizzle-orm';
 import { type Database, withRetry, parseDecimal } from '../db';
 import { expenses, expenseSplits, settlements, users } from '../db/schema';
-import { generateSpendingTrends, formatTrendsMessage } from '../utils/spending-visualization';
 
 export async function handleStats(ctx: Context, db: Database) {
 	// Only work in group chats
@@ -23,15 +22,10 @@ export async function handleStats(ctx: Context, db: Database) {
 					totalAmount: sql<string>`SUM(${expenses.amount})`,
 					activePayers: sql<number>`COUNT(DISTINCT ${expenses.paidBy})::int`,
 					activeDays: sql<number>`COUNT(DISTINCT DATE(${expenses.createdAt}))::int`,
-					firstExpenseDate: sql<Date>`MIN(${expenses.createdAt})`
+					firstExpenseDate: sql<Date>`MIN(${expenses.createdAt})`,
 				})
 				.from(expenses)
-				.where(
-					and(
-						eq(expenses.groupId, groupId),
-						eq(expenses.deleted, false)
-					)
-				);
+				.where(and(eq(expenses.groupId, groupId), eq(expenses.deleted, false)));
 			return result[0];
 		});
 
@@ -39,16 +33,11 @@ export async function handleStats(ctx: Context, db: Database) {
 		const participants = await withRetry(async () => {
 			const result = await db
 				.select({
-					activeParticipants: sql<number>`COUNT(DISTINCT ${expenseSplits.userId})::int`
+					activeParticipants: sql<number>`COUNT(DISTINCT ${expenseSplits.userId})::int`,
 				})
 				.from(expenseSplits)
 				.innerJoin(expenses, eq(expenseSplits.expenseId, expenses.id))
-				.where(
-					and(
-						eq(expenses.groupId, groupId),
-						eq(expenses.deleted, false)
-					)
-				);
+				.where(and(eq(expenses.groupId, groupId), eq(expenses.deleted, false)));
 			return result[0];
 		});
 
@@ -57,7 +46,7 @@ export async function handleStats(ctx: Context, db: Database) {
 			const result = await db
 				.select({
 					totalSettlements: sql<number>`COUNT(*)::int`,
-					totalSettled: sql<string>`SUM(${settlements.amount})`
+					totalSettled: sql<string>`SUM(${settlements.amount})`,
 				})
 				.from(settlements)
 				.where(eq(settlements.groupId, groupId));
@@ -70,16 +59,11 @@ export async function handleStats(ctx: Context, db: Database) {
 				.select({
 					username: users.username,
 					firstName: users.firstName,
-					totalPaid: sql<string>`SUM(${expenses.amount})`
+					totalPaid: sql<string>`SUM(${expenses.amount})`,
 				})
 				.from(expenses)
 				.innerJoin(users, eq(expenses.paidBy, users.telegramId))
-				.where(
-					and(
-						eq(expenses.groupId, groupId),
-						eq(expenses.deleted, false)
-					)
-				)
+				.where(and(eq(expenses.groupId, groupId), eq(expenses.deleted, false)))
 				.groupBy(expenses.paidBy, users.username, users.firstName)
 				.orderBy(desc(sql`SUM(${expenses.amount})`))
 				.limit(1);
@@ -92,15 +76,10 @@ export async function handleStats(ctx: Context, db: Database) {
 				.select({
 					category: sql<string>`COALESCE(${expenses.category}, 'Other')`,
 					count: sql<number>`COUNT(*)::int`,
-					total: sql<string>`SUM(${expenses.amount})`
+					total: sql<string>`SUM(${expenses.amount})`,
 				})
 				.from(expenses)
-				.where(
-					and(
-						eq(expenses.groupId, groupId),
-						eq(expenses.deleted, false)
-					)
-				)
+				.where(and(eq(expenses.groupId, groupId), eq(expenses.deleted, false)))
 				.groupBy(expenses.category)
 				.orderBy(desc(sql`SUM(${expenses.amount})`))
 				.limit(5);
@@ -110,12 +89,10 @@ export async function handleStats(ctx: Context, db: Database) {
 		const totalExpenses = overview?.totalExpenses || 0;
 		const totalAmount = parseDecimal(overview?.totalAmount || '0');
 		const totalSettled = parseDecimal(settlementStats?.totalSettled || '0');
-		const firstDate = overview?.firstExpenseDate 
-			? new Date(overview.firstExpenseDate).toLocaleDateString() 
-			: 'N/A';
+		const firstDate = overview?.firstExpenseDate ? new Date(overview.firstExpenseDate).toLocaleDateString() : 'N/A';
 
 		let message = `📊 <b>Statistics for ${groupName}</b>\n\n`;
-		
+
 		if (totalExpenses === 0) {
 			message += 'No expenses recorded yet!\n\nStart with /add [amount] [description]';
 		} else {
@@ -149,9 +126,9 @@ export async function handleStats(ctx: Context, db: Database) {
 				inline_keyboard: [
 					[{ text: '📈 View Trends', callback_data: 'view_trends' }],
 					[{ text: '📊 View Balance', callback_data: 'view_balance' }],
-					[{ text: '💵 Add Expense', callback_data: 'add_expense_help' }]
-				]
-			}
+					[{ text: '💵 Add Expense', callback_data: 'add_expense_help' }],
+				],
+			},
 		});
 	} catch (error) {
 		await ctx.reply('❌ Error getting statistics. Please try again.');

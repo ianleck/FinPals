@@ -15,26 +15,26 @@ export function createMockContext(overrides: any = {}): Context {
 			chat: {
 				id: -1001234567890,
 				type: 'group',
-				title: 'Test Group'
+				title: 'Test Group',
 			},
 			from: {
 				id: 123456789,
 				is_bot: false,
 				first_name: 'Test',
-				username: 'testuser'
+				username: 'testuser',
 			},
-			...overrides.message
+			...overrides.message,
 		},
 		chat: overrides.chat || {
 			id: -1001234567890,
 			type: 'group',
-			title: 'Test Group'
+			title: 'Test Group',
 		},
 		from: overrides.from || {
 			id: 123456789,
 			is_bot: false,
 			first_name: 'Test',
-			username: 'testuser'
+			username: 'testuser',
 		},
 		reply: vi.fn(),
 		answerCallbackQuery: vi.fn(),
@@ -42,9 +42,9 @@ export function createMockContext(overrides: any = {}): Context {
 		deleteMessage: vi.fn(),
 		api: {
 			sendMessage: vi.fn(),
-			deleteMessage: vi.fn()
+			deleteMessage: vi.fn(),
 		},
-		...overrides
+		...overrides,
 	} as any;
 }
 
@@ -61,27 +61,27 @@ export function createMockDatabase(): Database {
 		orderBy: vi.fn(() => chainableMock),
 		limit: vi.fn(() => chainableMock),
 		groupBy: vi.fn(() => chainableMock),
-		then: vi.fn((resolve) => Promise.resolve([]).then(resolve))
+		then: vi.fn((resolve) => Promise.resolve([]).then(resolve)),
 	};
 
 	return {
 		select: vi.fn(() => chainableMock),
 		insert: vi.fn(() => ({
 			values: vi.fn(() => ({
-				returning: vi.fn(() => Promise.resolve([{ id: 'test-id' }]))
-			}))
+				returning: vi.fn(() => Promise.resolve([{ id: 'test-id' }])),
+			})),
 		})),
 		update: vi.fn(() => ({
 			set: vi.fn(() => ({
 				where: vi.fn(() => ({
-					returning: vi.fn(() => Promise.resolve([]))
-				}))
-			}))
+					returning: vi.fn(() => Promise.resolve([])),
+				})),
+			})),
 		})),
 		delete: vi.fn(() => ({
 			where: vi.fn(() => ({
-				returning: vi.fn(() => Promise.resolve([]))
-			}))
+				returning: vi.fn(() => Promise.resolve([])),
+			})),
 		})),
 		transaction: vi.fn(async (fn) => {
 			const txMock = createMockDatabase();
@@ -89,8 +89,8 @@ export function createMockDatabase(): Database {
 		}),
 		execute: vi.fn(() => Promise.resolve({ rows: [] })),
 		$client: {
-			unsafe: vi.fn(() => Promise.resolve({ rows: [] }))
-		}
+			unsafe: vi.fn(() => Promise.resolve({ rows: [] })),
+		},
 	} as any;
 }
 
@@ -103,14 +103,14 @@ export function createMockEnv(): Env {
 		TELEGRAM_BOT_API_SECRET_TOKEN: 'test-secret',
 		ENV: 'test',
 		HYPERDRIVE: {
-			connectionString: 'postgresql://test@localhost/test'
+			connectionString: 'postgresql://test@localhost/test',
 		},
 		SESSIONS: {
 			get: vi.fn(),
 			put: vi.fn(),
 			delete: vi.fn(),
-			list: vi.fn()
-		}
+			list: vi.fn(),
+		},
 	} as any;
 }
 

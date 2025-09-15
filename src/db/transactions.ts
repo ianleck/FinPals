@@ -3,6 +3,7 @@
  * Ensures data consistency and proper error handling
  */
 
+import { eq, and } from 'drizzle-orm';
 import { Database, withRetry } from './index';
 import { expenses, expenseSplits, settlements, users, groupMembers } from './schema';
 
@@ -43,7 +44,7 @@ export interface SettlementInput {
 export async function createExpenseWithSplits(
 	db: Database,
 	expenseData: ExpenseInput,
-	splits: SplitInput[]
+	splits: SplitInput[],
 ): Promise<{ id: string; amount: string; description: string | null }> {
 	return withRetry(async () => {
 		return await db.transaction(async (tx) => {
@@ -63,11 +64,11 @@ export async function createExpenseWithSplits(
 			// Insert the splits if any
 			if (splits.length > 0) {
 				await tx.insert(expenseSplits).values(
-					splits.map(split => ({
+					splits.map((split) => ({
 						expenseId: expense.id,
 						userId: split.userId,
 						amount: split.amount,
-					}))
+					})),
 				);
 			}
 
@@ -80,10 +81,7 @@ export async function createExpenseWithSplits(
  * Records a settlement transaction
  * Ensures atomic operation
  */
-export async function recordSettlement(
-	db: Database,
-	settlementData: SettlementInput
-): Promise<{ id: string; amount: string }> {
+export async function recordSettlement(db: Database, settlementData: SettlementInput): Promise<{ id: string; amount: string }> {
 	return withRetry(async () => {
 		return await db.transaction(async (tx) => {
 			// Verify both users exist
@@ -124,11 +122,7 @@ export async function recordSettlement(
  * Deletes an expense and all its splits
  * Uses soft delete pattern
  */
-export async function deleteExpenseWithSplits(
-	db: Database,
-	expenseId: string,
-	userId: string
-): Promise<boolean> {
+export async function deleteExpenseWithSplits(db: Database, expenseId: string, userId: string): Promise<boolean> {
 	return withRetry(async () => {
 		return await db.transaction(async (tx) => {
 			// Check if expense exists and user has permission
@@ -138,12 +132,7 @@ export async function deleteExpenseWithSplits(
 					createdBy: expenses.createdBy,
 				})
 				.from(expenses)
-				.where(
-					and(
-						eq(expenses.id, expenseId),
-						eq(expenses.deleted, false)
-					)
-				)
+				.where(and(eq(expenses.id, expenseId), eq(expenses.deleted, false)))
 				.limit(1);
 
 			if (!expense) {
@@ -155,10 +144,7 @@ export async function deleteExpenseWithSplits(
 			}
 
 			// Soft delete the expense
-			await tx
-				.update(expenses)
-				.set({ deleted: true })
-				.where(eq(expenses.id, expenseId));
+			await tx.update(expenses).set({ deleted: true }).where(eq(expenses.id, expenseId));
 
 			// Note: Splits remain for audit trail but expense is marked deleted
 
@@ -170,12 +156,7 @@ export async function deleteExpenseWithSplits(
 /**
  * Updates an expense amount and recalculates splits
  */
-export async function updateExpenseWithSplits(
-	db: Database,
-	expenseId: string,
-	newAmount: string,
-	userId: string
-): Promise<boolean> {
+export async function updateExpenseWithSplits(db: Database, expenseId: string, newAmount: string, userId: string): Promise<boolean> {
 	return withRetry(async () => {
 		return await db.transaction(async (tx) => {
 			// Check permission
@@ -185,12 +166,7 @@ export async function updateExpenseWithSplits(
 					createdBy: expenses.createdBy,
 				})
 				.from(expenses)
-				.where(
-					and(
-						eq(expenses.id, expenseId),
-						eq(expenses.deleted, false)
-					)
-				)
+				.where(and(eq(expenses.id, expenseId), eq(expenses.deleted, false)))
 				.limit(1);
 
 			if (!expense || expense.createdBy !== userId) {
@@ -206,25 +182,20 @@ export async function updateExpenseWithSplits(
 				.where(eq(expenseSplits.expenseId, expenseId));
 
 			// Update expense amount
-			await tx
-				.update(expenses)
-				.set({ amount: newAmount })
-				.where(eq(expenses.id, expenseId));
+			await tx.update(expenses).set({ amount: newAmount }).where(eq(expenses.id, expenseId));
 
 			// Delete old splits
-			await tx
-				.delete(expenseSplits)
-				.where(eq(expenseSplits.expenseId, expenseId));
+			await tx.delete(expenseSplits).where(eq(expenseSplits.expenseId, expenseId));
 
 			// Recalculate and insert new splits
 			if (existingSplits.length > 0) {
 				const splitAmount = (parseFloat(newAmount) / existingSplits.length).toFixed(2);
 				await tx.insert(expenseSplits).values(
-					existingSplits.map(split => ({
+					existingSplits.map((split) => ({
 						expenseId: expenseId,
 						userId: split.userId,
 						amount: splitAmount,
-					}))
+					})),
 				);
 			}
 
@@ -240,16 +211,12 @@ export async function addUserToGroup(
 	db: Database,
 	userId: string,
 	groupId: string,
-	userData?: { username?: string; firstName?: string; lastName?: string }
+	userData?: { username?: string; firstName?: string; lastName?: string },
 ): Promise<boolean> {
 	return withRetry(async () => {
 		return await db.transaction(async (tx) => {
 			// Ensure user exists or create
-			const [existingUser] = await tx
-				.select({ id: users.telegramId })
-				.from(users)
-				.where(eq(users.telegramId, userId))
-				.limit(1);
+			const [existingUser] = await tx.select({ id: users.telegramId }).from(users).where(eq(users.telegramId, userId)).limit(1);
 
 			if (!existingUser) {
 				await tx.insert(users).values({
@@ -264,12 +231,7 @@ export async function addUserToGroup(
 			const [membership] = await tx
 				.select({ userId: groupMembers.userId, active: groupMembers.active })
 				.from(groupMembers)
-				.where(
-					and(
-						eq(groupMembers.groupId, groupId),
-						eq(groupMembers.userId, userId)
-					)
-				)
+				.where(and(eq(groupMembers.groupId, groupId), eq(groupMembers.userId, userId)))
 				.limit(1);
 
 			if (!membership) {
@@ -283,18 +245,10 @@ export async function addUserToGroup(
 				await tx
 					.update(groupMembers)
 					.set({ active: true })
-					.where(
-						and(
-							eq(groupMembers.groupId, groupId),
-							eq(groupMembers.userId, userId)
-						)
-					);
+					.where(and(eq(groupMembers.groupId, groupId), eq(groupMembers.userId, userId)));
 			}
 
 			return true;
 		});
 	});
 }
-
-// Missing imports - add at top
-import { eq, and } from 'drizzle-orm';

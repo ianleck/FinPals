@@ -8,7 +8,7 @@ describe('Expense Flow Integration', () => {
 			const debts = [
 				{ from: 'A', to: 'B', amount: new Money(30) },
 				{ from: 'B', to: 'C', amount: new Money(20) },
-				{ from: 'C', to: 'A', amount: new Money(10) }
+				{ from: 'C', to: 'A', amount: new Money(10) },
 			];
 
 			// Manual simplification logic for testing
@@ -41,14 +41,12 @@ describe('Expense Flow Integration', () => {
 				for (const creditor of creditors) {
 					if (debtor.amount.isZero() || creditor.amount.isZero()) continue;
 
-					const settleAmount = debtor.amount.isLessThan(creditor.amount)
-						? debtor.amount
-						: creditor.amount;
+					const settleAmount = debtor.amount.isLessThan(creditor.amount) ? debtor.amount : creditor.amount;
 
 					simplified.push({
 						from: debtor.person,
 						to: creditor.person,
-						amount: settleAmount
+						amount: settleAmount,
 					});
 
 					debtor.amount = debtor.amount.subtract(settleAmount);
@@ -61,8 +59,8 @@ describe('Expense Flow Integration', () => {
 			expect(simplified.length).toBeLessThanOrEqual(2);
 
 			// Verify net flow is preserved (but less total transactions)
-			const totalOriginal = sumMoney(debts.map(d => d.amount));
-			const totalSimplified = sumMoney(simplified.map(d => d.amount));
+			const totalOriginal = sumMoney(debts.map((d) => d.amount));
+			const totalSimplified = sumMoney(simplified.map((d) => d.amount));
 			expect(totalOriginal.toNumber()).toBe(60);
 			expect(totalSimplified.toNumber()).toBeLessThan(totalOriginal.toNumber());
 		});
@@ -72,7 +70,7 @@ describe('Expense Flow Integration', () => {
 			const splits = total.splitEvenly(3);
 
 			expect(splits).toHaveLength(3);
-			splits.forEach(split => {
+			splits.forEach((split) => {
 				expect(split.toNumber()).toBe(30);
 			});
 
@@ -100,9 +98,9 @@ describe('Expense Flow Integration', () => {
 		it('should calculate settlement amounts correctly', () => {
 			// User balances after expenses
 			const balances = new Map<string, Money>([
-				['user1', new Money(60)],   // Paid more, is owed
-				['user2', new Money(-30)],  // Owes money
-				['user3', new Money(-30)]   // Owes money
+				['user1', new Money(60)], // Paid more, is owed
+				['user2', new Money(-30)], // Owes money
+				['user3', new Money(-30)], // Owes money
 			]);
 
 			// Calculate who owes whom
@@ -123,15 +121,13 @@ describe('Expense Flow Integration', () => {
 				for (const creditor of creditors) {
 					if (debtor.amount.isZero() || creditor.amount.isZero()) continue;
 
-					const settleAmount = debtor.amount.isLessThan(creditor.amount)
-						? debtor.amount
-						: creditor.amount;
+					const settleAmount = debtor.amount.isLessThan(creditor.amount) ? debtor.amount : creditor.amount;
 
 					if (settleAmount.isPositive()) {
 						settlements.push({
 							from: debtor.userId,
 							to: creditor.userId,
-							amount: settleAmount
+							amount: settleAmount,
 						});
 
 						debtor.amount = debtor.amount.subtract(settleAmount);
@@ -144,12 +140,12 @@ describe('Expense Flow Integration', () => {
 			expect(settlements[0]).toEqual({
 				from: 'user2',
 				to: 'user1',
-				amount: new Money(30)
+				amount: new Money(30),
 			});
 			expect(settlements[1]).toEqual({
 				from: 'user3',
 				to: 'user1',
-				amount: new Money(30)
+				amount: new Money(30),
 			});
 		});
 	});

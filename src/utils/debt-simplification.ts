@@ -4,88 +4,83 @@ import { toResultArray } from './db-helpers';
 import { Money, formatMoney } from './money';
 
 interface Balance {
-    userId: string;
-    amount: Money;
-    userName?: string;
+	userId: string;
+	amount: Money;
+	userName?: string;
 }
 
 interface Transaction {
-    from: string;
-    to: string;
-    amount: Money;
-    fromName?: string;
-    toName?: string;
+	from: string;
+	to: string;
+	amount: Money;
+	fromName?: string;
+	toName?: string;
 }
 
 /**
  * Simplifies debts within a group to minimize the number of transactions needed
  * Uses a greedy algorithm to match creditors and debtors
  */
-export async function simplifyDebts(
-    db: Database,
-    groupId: string,
-    tripId?: string
-): Promise<Transaction[]> {
-    // Get all balances for the group
-    const balances = await calculateNetBalances(db, groupId, tripId);
-    
-    // Separate creditors (positive balance) and debtors (negative balance)
-    const creditors: Balance[] = [];
-    const debtors: Balance[] = [];
-    
-    for (const balance of balances) {
-        if (balance.amount.isGreaterThan(new Money(0.01))) { // Small epsilon to handle floating point
-            creditors.push(balance);
-        } else if (balance.amount.isLessThan(new Money(-0.01))) {
-            debtors.push({ ...balance, amount: balance.amount.abs() });
-        }
-    }
-    
-    // Sort both arrays in descending order of amount
-    creditors.sort((a, b) => b.amount.isGreaterThan(a.amount) ? 1 : -1);
-    debtors.sort((a, b) => b.amount.isGreaterThan(a.amount) ? 1 : -1);
-    
-    const transactions: Transaction[] = [];
-    let i = 0, j = 0;
-    
-    // Greedy algorithm to minimize transactions
-    while (i < creditors.length && j < debtors.length) {
-        const creditor = creditors[i];
-        const debtor = debtors[j];
-        
-        const amount = creditor.amount.isLessThan(debtor.amount) ? creditor.amount : debtor.amount;
+export async function simplifyDebts(db: Database, groupId: string, tripId?: string): Promise<Transaction[]> {
+	// Get all balances for the group
+	const balances = await calculateNetBalances(db, groupId, tripId);
 
-        if (amount.isGreaterThan(new Money(0.01))) { // Only create transaction if meaningful amount
-            transactions.push({
-                from: debtor.userId,
-                to: creditor.userId,
-                amount: amount,
-                fromName: debtor.userName,
-                toName: creditor.userName
-            });
-        }
+	// Separate creditors (positive balance) and debtors (negative balance)
+	const creditors: Balance[] = [];
+	const debtors: Balance[] = [];
 
-        creditor.amount = creditor.amount.subtract(amount);
-        debtor.amount = debtor.amount.subtract(amount);
+	for (const balance of balances) {
+		if (balance.amount.isGreaterThan(new Money(0.01))) {
+			// Small epsilon to handle floating point
+			creditors.push(balance);
+		} else if (balance.amount.isLessThan(new Money(-0.01))) {
+			debtors.push({ ...balance, amount: balance.amount.abs() });
+		}
+	}
 
-        // Move to next creditor/debtor if current one is settled
-        if (creditor.amount.isLessThan(new Money(0.01))) i++;
-        if (debtor.amount.isLessThan(new Money(0.01))) j++;
-    }
-    
-    return transactions;
+	// Sort both arrays in descending order of amount
+	creditors.sort((a, b) => (b.amount.isGreaterThan(a.amount) ? 1 : -1));
+	debtors.sort((a, b) => (b.amount.isGreaterThan(a.amount) ? 1 : -1));
+
+	const transactions: Transaction[] = [];
+	let i = 0,
+		j = 0;
+
+	// Greedy algorithm to minimize transactions
+	while (i < creditors.length && j < debtors.length) {
+		const creditor = creditors[i];
+		const debtor = debtors[j];
+
+		const amount = creditor.amount.isLessThan(debtor.amount) ? creditor.amount : debtor.amount;
+
+		if (amount.isGreaterThan(new Money(0.01))) {
+			// Only create transaction if meaningful amount
+			transactions.push({
+				from: debtor.userId,
+				to: creditor.userId,
+				amount: amount,
+				fromName: debtor.userName,
+				toName: creditor.userName,
+			});
+		}
+
+		creditor.amount = creditor.amount.subtract(amount);
+		debtor.amount = debtor.amount.subtract(amount);
+
+		// Move to next creditor/debtor if current one is settled
+		if (creditor.amount.isLessThan(new Money(0.01))) i++;
+		if (debtor.amount.isLessThan(new Money(0.01))) j++;
+	}
+
+	return transactions;
 }
 
 /**
  * Calculate net balances for all users in a group
  */
-async function calculateNetBalances(
-    db: Database,
-    groupId: string,
-    tripId?: string
-): Promise<Balance[]> {
-    // Get all expenses and settlements
-    const result = await db.execute(sql`
+async function calculateNetBalances(db: Database, groupId: string, tripId?: string): Promise<Balance[]> {
+	// Get all expenses and settlements
+	const result = await db.execute(sql`
         WITH expense_balances AS (
             -- Money paid by each user
             SELECT 
@@ -170,42 +165,41 @@ async function calculateNetBalances(
                   (COALESCE(nb.total_owed, 0) + COALESCE(nb.total_settlement_received, 0))) > 0.01
         ORDER BY net_balance DESC
     `);
-    
-    
-    return toResultArray<any>(result).map((row: any) => ({
-        userId: row.user_id,
-        amount: Money.fromDatabase(row.net_balance),
-        userName: row.username || row.first_name || 'Unknown'
-    }));
+
+	return toResultArray<any>(result).map((row: any) => ({
+		userId: row.user_id,
+		amount: Money.fromDatabase(row.net_balance),
+		userName: row.username || row.first_name || 'Unknown',
+	}));
 }
 
 /**
  * Get simplified settlement plan as a formatted message
  */
 export async function getSimplifiedSettlementPlan(
-    db: Database,
-    groupId: string,
-    tripId?: string
-): Promise<{ transactions: Transaction[], message: string }> {
-    const transactions = await simplifyDebts(db, groupId, tripId);
-    
-    if (transactions.length === 0) {
-        return {
-            transactions: [],
-            message: '✅ All settled up! No payments needed.'
-        };
-    }
-    
-    let message = '💡 <b>Simplified Settlement Plan</b>\n\n';
-    message += 'Instead of multiple transactions, just:\n\n';
-    
-    let totalAmount = new Money(0);
-    for (const txn of transactions) {
-        message += `• <b>${txn.fromName}</b> pays <b>${txn.toName}</b>: $${formatMoney(txn.amount)}\n`;
-        totalAmount = totalAmount.add(txn.amount);
-    }
+	db: Database,
+	groupId: string,
+	tripId?: string,
+): Promise<{ transactions: Transaction[]; message: string }> {
+	const transactions = await simplifyDebts(db, groupId, tripId);
 
-    message += `\n<i>Total: $${formatMoney(totalAmount)} across ${transactions.length} payment${transactions.length > 1 ? 's' : ''}</i>`;
-    
-    return { transactions, message };
+	if (transactions.length === 0) {
+		return {
+			transactions: [],
+			message: '✅ All settled up! No payments needed.',
+		};
+	}
+
+	let message = '💡 <b>Simplified Settlement Plan</b>\n\n';
+	message += 'Instead of multiple transactions, just:\n\n';
+
+	let totalAmount = new Money(0);
+	for (const txn of transactions) {
+		message += `• <b>${txn.fromName}</b> pays <b>${txn.toName}</b>: $${formatMoney(txn.amount)}\n`;
+		totalAmount = totalAmount.add(txn.amount);
+	}
+
+	message += `\n<i>Total: $${formatMoney(totalAmount)} across ${transactions.length} payment${transactions.length > 1 ? 's' : ''}</i>`;
+
+	return { transactions, message };
 }

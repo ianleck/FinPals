@@ -33,7 +33,13 @@
       "Bash(npm install:*)",
       "Bash(xargs:*)",
       "Bash(npx tsx:*)",
-      "Bash(npx vitest run:*)"
+      "Bash(npx vitest run:*)",
+      "Bash(tree:*)",
+      "Bash(git --no-pager diff src/utils/logger.ts src/index.ts eslint.config.mjs)",
+      "Bash(npx prettier:*)",
+      "Bash(sed:*)",
+      "Bash(npx eslint:*)",
+      "Bash(awk:*)"
     ],
     "deny": []
   },

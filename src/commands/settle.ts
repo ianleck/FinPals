@@ -1,10 +1,11 @@
 import { Context } from 'grammy';
-import { eq, and, sql, or, inArray } from 'drizzle-orm';
+import { eq, and, sql, inArray } from 'drizzle-orm';
 import { type Database, withRetry } from '../db';
-import { users, groups, groupMembers, expenses, expenseSplits, settlements } from '../db/schema';
+import { users, groupMembers, expenses, expenseSplits, settlements } from '../db/schema';
 import { ERROR_MESSAGES } from '../utils/constants';
 import { reply } from '../utils/reply';
 import { Money, parseMoney, formatMoney } from '../utils/money';
+import { logger } from '../utils/logger';
 
 export async function handleSettle(ctx: Context, db: Database) {
 	// Only work in group chats
@@ -23,16 +24,17 @@ export async function handleSettle(ctx: Context, db: Database) {
 	}
 
 	if (args.length < 2) {
-		await reply(ctx, 
+		await reply(
+			ctx,
 			'❌ Invalid format!\n\n' +
-			'Usage:\n' +
-			'• /settle - Show all unsettled balances\n' +
-			'• /settle @username [amount] - Record a payment\n' +
-			'• /settle @username partial - Pay part of what you owe\n\n' +
-			'Examples:\n' +
-			'• /settle @john 25.50 - Pay John $25.50\n' +
-			'• /settle @john partial - Choose amount to pay John',
-			{ parse_mode: 'HTML' }
+				'Usage:\n' +
+				'• /settle - Show all unsettled balances\n' +
+				'• /settle @username [amount] - Record a payment\n' +
+				'• /settle @username partial - Pay part of what you owe\n\n' +
+				'Examples:\n' +
+				'• /settle @john 25.50 - Pay John $25.50\n' +
+				'• /settle @john partial - Choose amount to pay John',
+			{ parse_mode: 'HTML' },
 		);
 		return;
 	}
@@ -40,7 +42,7 @@ export async function handleSettle(ctx: Context, db: Database) {
 	// Parse mention and amount
 	const mention = args[0];
 	if (!mention.startsWith('@')) {
-		await reply(ctx, '❌ Please mention the user you\'re settling with (@username)');
+		await reply(ctx, "❌ Please mention the user you're settling with (@username)");
 		return;
 	}
 
@@ -67,27 +69,19 @@ export async function handleSettle(ctx: Context, db: Database) {
 				.select({
 					telegramId: users.telegramId,
 					username: users.username,
-					firstName: users.firstName
+					firstName: users.firstName,
 				})
 				.from(users)
 				.innerJoin(groupMembers, eq(users.telegramId, groupMembers.userId))
-				.where(
-					and(
-						eq(groupMembers.groupId, groupId),
-						eq(groupMembers.active, true),
-						eq(users.username, mention.substring(1))
-					)
-				)
+				.where(and(eq(groupMembers.groupId, groupId), eq(groupMembers.active, true), eq(users.username, mention.substring(1))))
 				.limit(1);
 			return result[0];
 		});
 
 		if (!groupMember) {
-			await reply(ctx, 
-				`❌ User ${mention} not found in this group.\n\n` +
-				'Make sure they have used the bot at least once.',
-				{ parse_mode: 'HTML' }
-			);
+			await reply(ctx, `❌ User ${mention} not found in this group.\n\n` + 'Make sure they have used the bot at least once.', {
+				parse_mode: 'HTML',
+			});
 			return;
 		}
 
@@ -104,7 +98,7 @@ export async function handleSettle(ctx: Context, db: Database) {
 				fromUser: fromUserId,
 				toUser: toUserId,
 				amount: amount.toDatabase(),
-				createdBy: fromUserId
+				createdBy: fromUserId,
 			});
 		});
 
@@ -120,19 +114,18 @@ export async function handleSettle(ctx: Context, db: Database) {
 			balanceMessage = `Remaining: @${fromUsername} owes @${toUsername} ${formatMoney(newBalance.abs())}`;
 		}
 
-		await reply(ctx,
-			`💰 <b>Settlement Recorded</b>\n\n` +
-			`@${fromUsername} paid @${toUsername}: <b>${formatMoney(amount)}</b>\n\n` +
-			balanceMessage,
+		await reply(
+			ctx,
+			`💰 <b>Settlement Recorded</b>\n\n` + `@${fromUsername} paid @${toUsername}: <b>${formatMoney(amount)}</b>\n\n` + balanceMessage,
 			{
 				parse_mode: 'HTML',
 				reply_markup: {
 					inline_keyboard: [
 						[{ text: '📊 View All Balances', callback_data: 'view_balance' }],
-						[{ text: '➕ Add Expense', callback_data: 'add_expense_help' }]
-					]
-				}
-			}
+						[{ text: '➕ Add Expense', callback_data: 'add_expense_help' }],
+					],
+				},
+			},
 		);
 
 		// Send DM notification to the recipient
@@ -140,85 +133,58 @@ export async function handleSettle(ctx: Context, db: Database) {
 			await ctx.api.sendMessage(
 				toUserId,
 				`💰 <b>Payment Received!</b>\n\n` +
-				`@${fromUsername} paid you <b>${formatMoney(amount)}</b>\n` +
-				`Group: ${ctx.chat?.title || 'your group'}\n\n` +
-				balanceMessage,
-				{ parse_mode: 'HTML' }
+					`@${fromUsername} paid you <b>${formatMoney(amount)}</b>\n` +
+					`Group: ${ctx.chat?.title || 'your group'}\n\n` +
+					balanceMessage,
+				{ parse_mode: 'HTML' },
 			);
-		} catch (error) {
+		} catch {
 			// User might have blocked the bot
 		}
-	} catch (error) {
+	} catch {
 		await reply(ctx, ERROR_MESSAGES.DATABASE_ERROR);
 	}
 }
 
-async function calculateNetBalance(
-	db: Database,
-	groupId: string,
-	userId1: string,
-	userId2: string
-): Promise<Money> {
+async function calculateNetBalance(db: Database, groupId: string, userId1: string, userId2: string): Promise<Money> {
 	return await withRetry(async () => {
 		// Get expenses where user1 paid and user2 owes
 		const user1PaidExpenses = await db
 			.select({
-				amount: sql<string>`SUM(${expenseSplits.amount})`
+				amount: sql<string>`SUM(${expenseSplits.amount})`,
 			})
 			.from(expenses)
 			.innerJoin(expenseSplits, eq(expenses.id, expenseSplits.expenseId))
 			.where(
-				and(
-					eq(expenses.groupId, groupId),
-					eq(expenses.deleted, false),
-					eq(expenses.paidBy, userId1),
-					eq(expenseSplits.userId, userId2)
-				)
+				and(eq(expenses.groupId, groupId), eq(expenses.deleted, false), eq(expenses.paidBy, userId1), eq(expenseSplits.userId, userId2)),
 			);
 
 		// Get expenses where user2 paid and user1 owes
 		const user2PaidExpenses = await db
 			.select({
-				amount: sql<string>`SUM(${expenseSplits.amount})`
+				amount: sql<string>`SUM(${expenseSplits.amount})`,
 			})
 			.from(expenses)
 			.innerJoin(expenseSplits, eq(expenses.id, expenseSplits.expenseId))
 			.where(
-				and(
-					eq(expenses.groupId, groupId),
-					eq(expenses.deleted, false),
-					eq(expenses.paidBy, userId2),
-					eq(expenseSplits.userId, userId1)
-				)
+				and(eq(expenses.groupId, groupId), eq(expenses.deleted, false), eq(expenses.paidBy, userId2), eq(expenseSplits.userId, userId1)),
 			);
 
 		// Get settlements from user1 to user2
 		const user1ToUser2Settlements = await db
 			.select({
-				amount: sql<string>`SUM(${settlements.amount})`
+				amount: sql<string>`SUM(${settlements.amount})`,
 			})
 			.from(settlements)
-			.where(
-				and(
-					eq(settlements.groupId, groupId),
-					eq(settlements.fromUser, userId1),
-					eq(settlements.toUser, userId2)
-				)
-			);
+			.where(and(eq(settlements.groupId, groupId), eq(settlements.fromUser, userId1), eq(settlements.toUser, userId2)));
 
 		// Get settlements from user2 to user1
 		const user2ToUser1Settlements = await db
 			.select({
-				amount: sql<string>`SUM(${settlements.amount})`
+				amount: sql<string>`SUM(${settlements.amount})`,
 			})
 			.from(settlements)
-			.where(
-				and(
-					eq(settlements.groupId, groupId),
-					eq(settlements.fromUser, userId2),
-					eq(settlements.toUser, userId1)
-				)
-			);
+			.where(and(eq(settlements.groupId, groupId), eq(settlements.fromUser, userId2), eq(settlements.toUser, userId1)));
 
 		const user1Paid = Money.fromDatabase(user1PaidExpenses[0]?.amount || '0');
 		const user2Paid = Money.fromDatabase(user2PaidExpenses[0]?.amount || '0');
@@ -253,14 +219,14 @@ export async function showUnsettledBalances(ctx: Context, db: Database) {
 			// Create settle buttons with format: settle_{owerId}_{owedId}_{amount}
 			const fullButtonText = `💰 Settle $${formatMoney(amount)}`;
 			const fullCallbackData = `settle_${from}_${to}_${formatMoney(amount)}_full`;
-			
+
 			const partialButtonText = `💵 Partial Payment`;
 			const partialCallbackData = `settle_${from}_${to}_${formatMoney(amount)}_partial`;
-			
+
 			// Add buttons for this balance
 			inlineButtons.push([
 				{ text: fullButtonText, callback_data: fullCallbackData },
-				{ text: partialButtonText, callback_data: partialCallbackData }
+				{ text: partialButtonText, callback_data: partialCallbackData },
 			]);
 		}
 
@@ -269,12 +235,11 @@ export async function showUnsettledBalances(ctx: Context, db: Database) {
 		await reply(ctx, message, {
 			parse_mode: 'HTML',
 			reply_markup: {
-				inline_keyboard: inlineButtons
-			}
+				inline_keyboard: inlineButtons,
+			},
 		});
-
 	} catch (error) {
-		console.error('Error showing unsettled balances:', error);
+		logger.error('Error showing unsettled balances', error);
 		await reply(ctx, ERROR_MESSAGES.DATABASE_ERROR);
 	}
 }
@@ -286,45 +251,45 @@ export async function handleSettleCallback(ctx: Context, db: Database) {
 	const owedId = parts[2];
 	const amount = new Money(parseFloat(parts[3]));
 	const settlementType = parts[4]; // 'full' or 'partial'
-	
+
 	const currentUserId = ctx.from!.id.toString();
-	
+
 	// Allow both parties to confirm the settlement
 	if (currentUserId !== owerId && currentUserId !== owedId) {
 		await ctx.answerCallbackQuery('Only the involved parties can settle this balance');
 		return;
 	}
-	
+
 	await ctx.answerCallbackQuery();
-	
+
 	// Handle partial settlement
 	if (settlementType === 'partial') {
 		await handlePartialSettlementCallback(ctx, db, owerId, owedId, amount.toNumber());
 		return;
 	}
-	
+
 	// Create a simulated settle command
 	const groupId = ctx.chat?.id.toString();
 	if (!groupId) return;
-	
+
 	// Get usernames for the settlement
 	const userDetails = await withRetry(async () => {
 		return await db
 			.select({
 				telegramId: users.telegramId,
 				username: users.username,
-				firstName: users.firstName
+				firstName: users.firstName,
 			})
 			.from(users)
 			.where(inArray(users.telegramId, [owerId, owedId]));
 	});
-	
-	const owerUser = userDetails.find(u => u.telegramId === owerId);
-	const owedUser = userDetails.find(u => u.telegramId === owedId);
-	
+
+	const owerUser = userDetails.find((u) => u.telegramId === owerId);
+	const owedUser = userDetails.find((u) => u.telegramId === owedId);
+
 	const owerName = owerUser?.username || owerUser?.firstName || 'User';
 	const owedName = owedUser?.username || owedUser?.firstName || 'User';
-	
+
 	// Record the settlement
 	await withRetry(async () => {
 		await db.insert(settlements).values({
@@ -332,26 +297,28 @@ export async function handleSettleCallback(ctx: Context, db: Database) {
 			fromUser: owerId,
 			toUser: owedId,
 			amount: amount.toDatabase(),
-			createdBy: currentUserId
+			createdBy: currentUserId,
 		});
 	});
-	
+
 	// Update the message based on who is settling
 	let settlementMessage: string;
 	if (currentUserId === owerId) {
 		// The person who owes is settling
-		settlementMessage = `💰 <b>Settlement Recorded</b>\n\n` +
+		settlementMessage =
+			`💰 <b>Settlement Recorded</b>\n\n` +
 			`@${owerName} paid @${owedName}: <b>${formatMoney(amount)}</b>\n\n` +
 			`✅ This balance has been settled!`;
 	} else {
 		// The person who is owed is recording the settlement
-		settlementMessage = `💰 <b>Settlement Recorded</b>\n\n` +
+		settlementMessage =
+			`💰 <b>Settlement Recorded</b>\n\n` +
 			`@${owedName} recorded that @${owerName} paid: <b>${formatMoney(amount)}</b>\n\n` +
 			`✅ This balance has been settled!`;
 	}
-	
+
 	await ctx.editMessageText(settlementMessage, { parse_mode: 'HTML' });
-	
+
 	// Send notification to the other party
 	try {
 		if (currentUserId === owerId) {
@@ -359,32 +326,32 @@ export async function handleSettleCallback(ctx: Context, db: Database) {
 			await ctx.api.sendMessage(
 				owedId,
 				`💰 <b>Payment Received!</b>\n\n` +
-				`@${owerName} paid you <b>${formatMoney(amount)}</b>\n` +
-				`Group: ${ctx.chat?.title || 'your group'}`,
-				{ parse_mode: 'HTML' }
+					`@${owerName} paid you <b>${formatMoney(amount)}</b>\n` +
+					`Group: ${ctx.chat?.title || 'your group'}`,
+				{ parse_mode: 'HTML' },
 			);
 		} else {
 			// Notify the person who owes that their payment was recorded
 			await ctx.api.sendMessage(
 				owerId,
 				`💰 <b>Payment Recorded!</b>\n\n` +
-				`@${owedName} has recorded that you paid them <b>${formatMoney(amount)}</b>\n` +
-				`Group: ${ctx.chat?.title || 'your group'}`,
-				{ parse_mode: 'HTML' }
+					`@${owedName} has recorded that you paid them <b>${formatMoney(amount)}</b>\n` +
+					`Group: ${ctx.chat?.title || 'your group'}`,
+				{ parse_mode: 'HTML' },
 			);
 		}
-	} catch (error) {
+	} catch {
 		// User might have blocked the bot
 	}
 }
 
 async function handlePartialSettlement(
-	ctx: Context, 
-	db: Database, 
-	mention: string, 
-	groupId: string, 
-	fromUserId: string, 
-	fromUsername: string
+	ctx: Context,
+	db: Database,
+	mention: string,
+	groupId: string,
+	fromUserId: string,
+	_fromUsername: string,
 ) {
 	try {
 		// Get the mentioned user
@@ -393,27 +360,19 @@ async function handlePartialSettlement(
 				.select({
 					telegramId: users.telegramId,
 					username: users.username,
-					firstName: users.firstName
+					firstName: users.firstName,
 				})
 				.from(users)
 				.innerJoin(groupMembers, eq(users.telegramId, groupMembers.userId))
-				.where(
-					and(
-						eq(groupMembers.groupId, groupId),
-						eq(groupMembers.active, true),
-						eq(users.username, mention.substring(1))
-					)
-				)
+				.where(and(eq(groupMembers.groupId, groupId), eq(groupMembers.active, true), eq(users.username, mention.substring(1))))
 				.limit(1);
 			return result[0];
 		});
 
 		if (!groupMember) {
-			await reply(ctx, 
-				`❌ User ${mention} not found in this group.\n\n` +
-				'Make sure they have used the bot at least once.',
-				{ parse_mode: 'HTML' }
-			);
+			await reply(ctx, `❌ User ${mention} not found in this group.\n\n` + 'Make sure they have used the bot at least once.', {
+				parse_mode: 'HTML',
+			});
 			return;
 		}
 
@@ -439,99 +398,96 @@ async function handlePartialSettlement(
 		// Show partial payment options
 		const buttons = [];
 		const commonAmounts = [10, 20, 25, 50, 100];
-		
+
 		// Add quick amount buttons
 		for (const amt of commonAmounts) {
 			if (new Money(amt).isLessThan(owedAmount)) {
-				buttons.push([{ 
-					text: `💵 Pay $${amt}`, 
-					callback_data: `partial_pay_${toUserId}_${amt}` 
-				}]);
+				buttons.push([
+					{
+						text: `💵 Pay $${amt}`,
+						callback_data: `partial_pay_${toUserId}_${amt}`,
+					},
+				]);
 			}
 		}
-		
+
 		// Add percentage buttons
 		buttons.push([
 			{ text: '25%', callback_data: `partial_pay_${toUserId}_${owedAmount.multiply(0.25).toString()}` },
-			{ text: '50%', callback_data: `partial_pay_${toUserId}_${owedAmount.multiply(0.50).toString()}` },
-			{ text: '75%', callback_data: `partial_pay_${toUserId}_${owedAmount.multiply(0.75).toString()}` }
+			{ text: '50%', callback_data: `partial_pay_${toUserId}_${owedAmount.multiply(0.5).toString()}` },
+			{ text: '75%', callback_data: `partial_pay_${toUserId}_${owedAmount.multiply(0.75).toString()}` },
 		]);
-		
+
 		// Add custom amount option
 		buttons.push([{ text: '✏️ Custom Amount', callback_data: `partial_custom_${toUserId}_${owedAmount.toString()}` }]);
 		buttons.push([{ text: '❌ Cancel', callback_data: 'close' }]);
 
-		await reply(ctx,
-			`💵 <b>Partial Settlement</b>\n\n` +
-			`You owe @${toUsername}: <b>${formatMoney(owedAmount)}</b>\n\n` +
-			`Select an amount to pay:`,
+		await reply(
+			ctx,
+			`💵 <b>Partial Settlement</b>\n\n` + `You owe @${toUsername}: <b>${formatMoney(owedAmount)}</b>\n\n` + `Select an amount to pay:`,
 			{
 				parse_mode: 'HTML',
-				reply_markup: { inline_keyboard: buttons }
-			}
+				reply_markup: { inline_keyboard: buttons },
+			},
 		);
 	} catch (error) {
-		console.error('Error handling partial settlement:', error);
+		logger.error('Error handling partial settlement', error);
 		await reply(ctx, ERROR_MESSAGES.DATABASE_ERROR);
 	}
 }
 
-async function handlePartialSettlementCallback(
-	ctx: Context,
-	db: Database,
-	owerId: string,
-	owedId: string,
-	totalAmount: number
-) {
+async function handlePartialSettlementCallback(ctx: Context, db: Database, owerId: string, owedId: string, totalAmount: number) {
 	const buttons = [];
 	const commonAmounts = [10, 20, 25, 50, 100];
-	
+
 	// Get usernames
 	const userDetails = await withRetry(async () => {
 		return await db
 			.select({
 				telegramId: users.telegramId,
 				username: users.username,
-				firstName: users.firstName
+				firstName: users.firstName,
 			})
 			.from(users)
 			.where(inArray(users.telegramId, [owerId, owedId]));
 	});
-	
-	const owerUser = userDetails.find(u => u.telegramId === owerId);
-	const owedUser = userDetails.find(u => u.telegramId === owedId);
-	
+
+	const owerUser = userDetails.find((u) => u.telegramId === owerId);
+	const owedUser = userDetails.find((u) => u.telegramId === owedId);
+
 	const owerName = owerUser?.username || owerUser?.firstName || 'User';
 	const owedName = owedUser?.username || owedUser?.firstName || 'User';
-	
+
 	// Add quick amount buttons
 	for (const amt of commonAmounts) {
 		if (amt < totalAmount) {
-			buttons.push([{ 
-				text: `💵 Pay $${amt}`, 
-				callback_data: `partial_pay_${owerId}_${owedId}_${amt}` 
-			}]);
+			buttons.push([
+				{
+					text: `💵 Pay $${amt}`,
+					callback_data: `partial_pay_${owerId}_${owedId}_${amt}`,
+				},
+			]);
 		}
 	}
-	
+
 	// Add percentage buttons
 	buttons.push([
 		{ text: '25%', callback_data: `partial_pay_${owerId}_${owedId}_${(totalAmount * 0.25).toFixed(2)}` },
-		{ text: '50%', callback_data: `partial_pay_${owerId}_${owedId}_${(totalAmount * 0.50).toFixed(2)}` },
-		{ text: '75%', callback_data: `partial_pay_${owerId}_${owedId}_${(totalAmount * 0.75).toFixed(2)}` }
+		{ text: '50%', callback_data: `partial_pay_${owerId}_${owedId}_${(totalAmount * 0.5).toFixed(2)}` },
+		{ text: '75%', callback_data: `partial_pay_${owerId}_${owedId}_${(totalAmount * 0.75).toFixed(2)}` },
 	]);
-	
+
 	// Add custom amount option
 	buttons.push([{ text: '✏️ Custom Amount', callback_data: `partial_custom_${owerId}_${owedId}_${totalAmount.toFixed(2)}` }]);
 	buttons.push([{ text: '◀️ Back', callback_data: 'show_settle_balances' }]);
 
 	await ctx.editMessageText(
 		`💵 <b>Partial Settlement</b>\n\n` +
-		`@${owerName} owes @${owedName}: <b>$${totalAmount.toFixed(2)}</b>\n\n` +
-		`Select an amount to pay:`,
+			`@${owerName} owes @${owedName}: <b>$${totalAmount.toFixed(2)}</b>\n\n` +
+			`Select an amount to pay:`,
 		{
 			parse_mode: 'HTML',
-			reply_markup: { inline_keyboard: buttons }
-		}
+			reply_markup: { inline_keyboard: buttons },
+		},
 	);
 }
