@@ -1,9 +1,10 @@
 import { Context } from 'grammy';
 import { eq, and, sql, or, inArray } from 'drizzle-orm';
-import { type Database, withRetry, formatAmount, parseDecimal } from '../db';
+import { type Database, withRetry } from '../db';
 import { users, groups, groupMembers, expenses, expenseSplits, settlements } from '../db/schema';
 import { ERROR_MESSAGES } from '../utils/constants';
 import { reply } from '../utils/reply';
+import { Money, parseMoney, formatMoney } from '../utils/money';
 
 export async function handleSettle(ctx: Context, db: Database) {
 	// Only work in group chats
@@ -53,8 +54,8 @@ export async function handleSettle(ctx: Context, db: Database) {
 		return;
 	}
 
-	const amount = parseFloat(args[1]);
-	if (isNaN(amount) || amount <= 0) {
+	const amount = parseMoney(args[1]);
+	if (!amount || amount.isZero() || amount.isNegative()) {
 		await reply(ctx, ERROR_MESSAGES.INVALID_AMOUNT);
 		return;
 	}
@@ -102,26 +103,26 @@ export async function handleSettle(ctx: Context, db: Database) {
 				groupId: groupId,
 				fromUser: fromUserId,
 				toUser: toUserId,
-				amount: formatAmount(amount),
+				amount: amount.toDatabase(),
 				createdBy: fromUserId
 			});
 		});
 
 		// Calculate new balance
-		const newBalance = netBalance - amount;
+		const newBalance = netBalance.subtract(amount);
 
 		let balanceMessage = '';
-		if (Math.abs(newBalance) < 0.01) {
+		if (newBalance.abs().isLessThan(new Money(0.01))) {
 			balanceMessage = `✅ All settled up between @${fromUsername} and @${toUsername}!`;
-		} else if (newBalance > 0) {
-			balanceMessage = `Remaining: @${toUsername} owes @${fromUsername} $${Math.abs(newBalance).toFixed(2)}`;
+		} else if (newBalance.isPositive()) {
+			balanceMessage = `Remaining: @${toUsername} owes @${fromUsername} ${formatMoney(newBalance.abs())}`;
 		} else {
-			balanceMessage = `Remaining: @${fromUsername} owes @${toUsername} $${Math.abs(newBalance).toFixed(2)}`;
+			balanceMessage = `Remaining: @${fromUsername} owes @${toUsername} ${formatMoney(newBalance.abs())}`;
 		}
 
-		await reply(ctx, 
+		await reply(ctx,
 			`💰 <b>Settlement Recorded</b>\n\n` +
-			`@${fromUsername} paid @${toUsername}: <b>$${amount.toFixed(2)}</b>\n\n` +
+			`@${fromUsername} paid @${toUsername}: <b>${formatMoney(amount)}</b>\n\n` +
 			balanceMessage,
 			{
 				parse_mode: 'HTML',
@@ -139,7 +140,7 @@ export async function handleSettle(ctx: Context, db: Database) {
 			await ctx.api.sendMessage(
 				toUserId,
 				`💰 <b>Payment Received!</b>\n\n` +
-				`@${fromUsername} paid you <b>$${amount.toFixed(2)}</b>\n` +
+				`@${fromUsername} paid you <b>${formatMoney(amount)}</b>\n` +
 				`Group: ${ctx.chat?.title || 'your group'}\n\n` +
 				balanceMessage,
 				{ parse_mode: 'HTML' }
@@ -153,11 +154,11 @@ export async function handleSettle(ctx: Context, db: Database) {
 }
 
 async function calculateNetBalance(
-	db: Database, 
-	groupId: string, 
-	userId1: string, 
+	db: Database,
+	groupId: string,
+	userId1: string,
 	userId2: string
-): Promise<number> {
+): Promise<Money> {
 	return await withRetry(async () => {
 		// Get expenses where user1 paid and user2 owes
 		const user1PaidExpenses = await db
@@ -219,13 +220,13 @@ async function calculateNetBalance(
 				)
 			);
 
-		const user1Paid = parseDecimal(user1PaidExpenses[0]?.amount || '0');
-		const user2Paid = parseDecimal(user2PaidExpenses[0]?.amount || '0');
-		const user1Settled = parseDecimal(user1ToUser2Settlements[0]?.amount || '0');
-		const user2Settled = parseDecimal(user2ToUser1Settlements[0]?.amount || '0');
+		const user1Paid = Money.fromDatabase(user1PaidExpenses[0]?.amount || '0');
+		const user2Paid = Money.fromDatabase(user2PaidExpenses[0]?.amount || '0');
+		const user1Settled = Money.fromDatabase(user1ToUser2Settlements[0]?.amount || '0');
+		const user2Settled = Money.fromDatabase(user2ToUser1Settlements[0]?.amount || '0');
 
 		// Net balance: positive means user2 owes user1, negative means user1 owes user2
-		return (user1Paid - user1Settled) - (user2Paid - user2Settled);
+		return user1Paid.subtract(user1Settled).subtract(user2Paid.subtract(user2Settled));
 	});
 }
 
@@ -247,14 +248,14 @@ export async function showUnsettledBalances(ctx: Context, db: Database) {
 
 		for (const debt of simplifiedDebts) {
 			const { from, to, amount, fromName, toName } = debt;
-			message += `@${fromName || 'User'} owes @${toName || 'User'}: <b>$${amount.toFixed(2)}</b>\n`;
+			message += `@${fromName || 'User'} owes @${toName || 'User'}: <b>$${formatMoney(amount)}</b>\n`;
 
 			// Create settle buttons with format: settle_{owerId}_{owedId}_{amount}
-			const fullButtonText = `💰 Settle $${amount.toFixed(2)}`;
-			const fullCallbackData = `settle_${from}_${to}_${amount.toFixed(2)}_full`;
+			const fullButtonText = `💰 Settle $${formatMoney(amount)}`;
+			const fullCallbackData = `settle_${from}_${to}_${formatMoney(amount)}_full`;
 			
 			const partialButtonText = `💵 Partial Payment`;
-			const partialCallbackData = `settle_${from}_${to}_${amount.toFixed(2)}_partial`;
+			const partialCallbackData = `settle_${from}_${to}_${formatMoney(amount)}_partial`;
 			
 			// Add buttons for this balance
 			inlineButtons.push([
@@ -283,7 +284,7 @@ export async function handleSettleCallback(ctx: Context, db: Database) {
 	const parts = ctx.callbackQuery.data.split('_');
 	const owerId = parts[1];
 	const owedId = parts[2];
-	const amount = parseFloat(parts[3]);
+	const amount = new Money(parseFloat(parts[3]));
 	const settlementType = parts[4]; // 'full' or 'partial'
 	
 	const currentUserId = ctx.from!.id.toString();
@@ -298,7 +299,7 @@ export async function handleSettleCallback(ctx: Context, db: Database) {
 	
 	// Handle partial settlement
 	if (settlementType === 'partial') {
-		await handlePartialSettlementCallback(ctx, db, owerId, owedId, amount);
+		await handlePartialSettlementCallback(ctx, db, owerId, owedId, amount.toNumber());
 		return;
 	}
 	
@@ -330,7 +331,7 @@ export async function handleSettleCallback(ctx: Context, db: Database) {
 			groupId: groupId,
 			fromUser: owerId,
 			toUser: owedId,
-			amount: formatAmount(amount),
+			amount: amount.toDatabase(),
 			createdBy: currentUserId
 		});
 	});
@@ -340,12 +341,12 @@ export async function handleSettleCallback(ctx: Context, db: Database) {
 	if (currentUserId === owerId) {
 		// The person who owes is settling
 		settlementMessage = `💰 <b>Settlement Recorded</b>\n\n` +
-			`@${owerName} paid @${owedName}: <b>$${amount.toFixed(2)}</b>\n\n` +
+			`@${owerName} paid @${owedName}: <b>${formatMoney(amount)}</b>\n\n` +
 			`✅ This balance has been settled!`;
 	} else {
 		// The person who is owed is recording the settlement
 		settlementMessage = `💰 <b>Settlement Recorded</b>\n\n` +
-			`@${owedName} recorded that @${owerName} paid: <b>$${amount.toFixed(2)}</b>\n\n` +
+			`@${owedName} recorded that @${owerName} paid: <b>${formatMoney(amount)}</b>\n\n` +
 			`✅ This balance has been settled!`;
 	}
 	
@@ -358,7 +359,7 @@ export async function handleSettleCallback(ctx: Context, db: Database) {
 			await ctx.api.sendMessage(
 				owedId,
 				`💰 <b>Payment Received!</b>\n\n` +
-				`@${owerName} paid you <b>$${amount.toFixed(2)}</b>\n` +
+				`@${owerName} paid you <b>${formatMoney(amount)}</b>\n` +
 				`Group: ${ctx.chat?.title || 'your group'}`,
 				{ parse_mode: 'HTML' }
 			);
@@ -367,7 +368,7 @@ export async function handleSettleCallback(ctx: Context, db: Database) {
 			await ctx.api.sendMessage(
 				owerId,
 				`💰 <b>Payment Recorded!</b>\n\n` +
-				`@${owedName} has recorded that you paid them <b>$${amount.toFixed(2)}</b>\n` +
+				`@${owedName} has recorded that you paid them <b>${formatMoney(amount)}</b>\n` +
 				`Group: ${ctx.chat?.title || 'your group'}`,
 				{ parse_mode: 'HTML' }
 			);
@@ -422,16 +423,16 @@ async function handlePartialSettlement(
 		// Get current balance
 		const netBalance = await calculateNetBalance(db, groupId, fromUserId, toUserId);
 
-		if (Math.abs(netBalance) < 0.01) {
+		if (netBalance.abs().isLessThan(new Money(0.01))) {
 			await reply(ctx, `✅ You're already settled up with @${toUsername}!`);
 			return;
 		}
 
-		const owedAmount = Math.abs(netBalance);
-		const isFromUserOwing = netBalance < 0;
+		const owedAmount = netBalance.abs();
+		const isFromUserOwing = netBalance.isNegative();
 
 		if (!isFromUserOwing) {
-			await reply(ctx, `❌ @${toUsername} owes you $${owedAmount.toFixed(2)}. They should initiate the payment.`);
+			await reply(ctx, `❌ @${toUsername} owes you $${formatMoney(owedAmount)}. They should initiate the payment.`);
 			return;
 		}
 
@@ -441,7 +442,7 @@ async function handlePartialSettlement(
 		
 		// Add quick amount buttons
 		for (const amt of commonAmounts) {
-			if (amt < owedAmount) {
+			if (new Money(amt).isLessThan(owedAmount)) {
 				buttons.push([{ 
 					text: `💵 Pay $${amt}`, 
 					callback_data: `partial_pay_${toUserId}_${amt}` 
@@ -451,18 +452,18 @@ async function handlePartialSettlement(
 		
 		// Add percentage buttons
 		buttons.push([
-			{ text: '25%', callback_data: `partial_pay_${toUserId}_${(owedAmount * 0.25).toFixed(2)}` },
-			{ text: '50%', callback_data: `partial_pay_${toUserId}_${(owedAmount * 0.50).toFixed(2)}` },
-			{ text: '75%', callback_data: `partial_pay_${toUserId}_${(owedAmount * 0.75).toFixed(2)}` }
+			{ text: '25%', callback_data: `partial_pay_${toUserId}_${owedAmount.multiply(0.25).toString()}` },
+			{ text: '50%', callback_data: `partial_pay_${toUserId}_${owedAmount.multiply(0.50).toString()}` },
+			{ text: '75%', callback_data: `partial_pay_${toUserId}_${owedAmount.multiply(0.75).toString()}` }
 		]);
 		
 		// Add custom amount option
-		buttons.push([{ text: '✏️ Custom Amount', callback_data: `partial_custom_${toUserId}_${owedAmount.toFixed(2)}` }]);
+		buttons.push([{ text: '✏️ Custom Amount', callback_data: `partial_custom_${toUserId}_${owedAmount.toString()}` }]);
 		buttons.push([{ text: '❌ Cancel', callback_data: 'close' }]);
 
 		await reply(ctx,
 			`💵 <b>Partial Settlement</b>\n\n` +
-			`You owe @${toUsername}: <b>$${owedAmount.toFixed(2)}</b>\n\n` +
+			`You owe @${toUsername}: <b>${formatMoney(owedAmount)}</b>\n\n` +
 			`Select an amount to pay:`,
 			{
 				parse_mode: 'HTML',

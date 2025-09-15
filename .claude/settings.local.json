@@ -31,7 +31,9 @@
       "WebFetch(domain:developers.cloudflare.com)",
       "Bash(npm test:*)",
       "Bash(npm install:*)",
-      "Bash(xargs:*)"
+      "Bash(xargs:*)",
+      "Bash(npx tsx:*)",
+      "Bash(npx vitest run:*)"
     ],
     "deny": []
   },

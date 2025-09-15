@@ -1,17 +1,18 @@
 import type { Database } from '../db';
 import { sql } from 'drizzle-orm';
 import { toResultArray } from './db-helpers';
+import { Money, formatMoney } from './money';
 
 interface Balance {
     userId: string;
-    amount: number;
+    amount: Money;
     userName?: string;
 }
 
 interface Transaction {
     from: string;
     to: string;
-    amount: number;
+    amount: Money;
     fromName?: string;
     toName?: string;
 }
@@ -33,16 +34,16 @@ export async function simplifyDebts(
     const debtors: Balance[] = [];
     
     for (const balance of balances) {
-        if (balance.amount > 0.01) { // Small epsilon to handle floating point
+        if (balance.amount.isGreaterThan(new Money(0.01))) { // Small epsilon to handle floating point
             creditors.push(balance);
-        } else if (balance.amount < -0.01) {
-            debtors.push({ ...balance, amount: Math.abs(balance.amount) });
+        } else if (balance.amount.isLessThan(new Money(-0.01))) {
+            debtors.push({ ...balance, amount: balance.amount.abs() });
         }
     }
     
     // Sort both arrays in descending order of amount
-    creditors.sort((a, b) => b.amount - a.amount);
-    debtors.sort((a, b) => b.amount - a.amount);
+    creditors.sort((a, b) => b.amount.isGreaterThan(a.amount) ? 1 : -1);
+    debtors.sort((a, b) => b.amount.isGreaterThan(a.amount) ? 1 : -1);
     
     const transactions: Transaction[] = [];
     let i = 0, j = 0;
@@ -52,24 +53,24 @@ export async function simplifyDebts(
         const creditor = creditors[i];
         const debtor = debtors[j];
         
-        const amount = Math.min(creditor.amount, debtor.amount);
-        
-        if (amount > 0.01) { // Only create transaction if meaningful amount
+        const amount = creditor.amount.isLessThan(debtor.amount) ? creditor.amount : debtor.amount;
+
+        if (amount.isGreaterThan(new Money(0.01))) { // Only create transaction if meaningful amount
             transactions.push({
                 from: debtor.userId,
                 to: creditor.userId,
-                amount: Number(amount.toFixed(2)),
+                amount: amount,
                 fromName: debtor.userName,
                 toName: creditor.userName
             });
         }
-        
-        creditor.amount -= amount;
-        debtor.amount -= amount;
-        
+
+        creditor.amount = creditor.amount.subtract(amount);
+        debtor.amount = debtor.amount.subtract(amount);
+
         // Move to next creditor/debtor if current one is settled
-        if (creditor.amount < 0.01) i++;
-        if (debtor.amount < 0.01) j++;
+        if (creditor.amount.isLessThan(new Money(0.01))) i++;
+        if (debtor.amount.isLessThan(new Money(0.01))) j++;
     }
     
     return transactions;
@@ -173,7 +174,7 @@ async function calculateNetBalances(
     
     return toResultArray<any>(result).map((row: any) => ({
         userId: row.user_id,
-        amount: row.net_balance,
+        amount: Money.fromDatabase(row.net_balance),
         userName: row.username || row.first_name || 'Unknown'
     }));
 }
@@ -198,13 +199,13 @@ export async function getSimplifiedSettlementPlan(
     let message = '💡 <b>Simplified Settlement Plan</b>\n\n';
     message += 'Instead of multiple transactions, just:\n\n';
     
-    let totalAmount = 0;
+    let totalAmount = new Money(0);
     for (const txn of transactions) {
-        message += `• <b>${txn.fromName}</b> pays <b>${txn.toName}</b>: $${txn.amount}\n`;
-        totalAmount += txn.amount;
+        message += `• <b>${txn.fromName}</b> pays <b>${txn.toName}</b>: $${formatMoney(txn.amount)}\n`;
+        totalAmount = totalAmount.add(txn.amount);
     }
-    
-    message += `\n<i>Total: $${totalAmount.toFixed(2)} across ${transactions.length} payment${transactions.length > 1 ? 's' : ''}</i>`;
+
+    message += `\n<i>Total: $${formatMoney(totalAmount)} across ${transactions.length} payment${transactions.length > 1 ? 's' : ''}</i>`;
     
     return { transactions, message };
 }

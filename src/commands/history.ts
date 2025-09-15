@@ -1,7 +1,8 @@
 import { Context } from 'grammy';
-import { eq, and, desc, sql, or } from 'drizzle-orm';
-import { type Database, withRetry, parseDecimal } from '../db';
+import { eq, and, desc, sql, or, inArray } from 'drizzle-orm';
+import { type Database, withRetry } from '../db';
 import { expenses, settlements, users, expenseSplits } from '../db/schema';
+import { Money, formatMoney } from '../utils/money';
 
 export async function handleHistory(ctx: Context, db: Database) {
 	const isPersonal = ctx.chat?.type === 'private';
@@ -74,7 +75,7 @@ export async function handleHistory(ctx: Context, db: Database) {
 					firstName: users.firstName
 				})
 				.from(users)
-				.where(sql`${users.telegramId} IN ${toUserIds}`);
+				.where(toUserIds.length > 0 ? inArray(users.telegramId, toUserIds) : sql`1=0`);
 		}) : [];
 
 		const toUserMap = new Map(toUsers.map(u => [u.telegramId, u]));
@@ -115,7 +116,7 @@ export async function handleHistory(ctx: Context, db: Database) {
 		for (const tx of allTransactions) {
 			const date = new Date(tx.createdAt).toLocaleDateString();
 			const userName = tx.userUsername || tx.userFirstName || 'Unknown';
-			const amount = parseDecimal(tx.amount);
+			const amount = Money.fromDatabase(tx.amount);
 
 			if (tx.type === 'expense') {
 				// Get split count for expense
@@ -129,12 +130,12 @@ export async function handleHistory(ctx: Context, db: Database) {
 				const splitCount = splits?.count || 1;
 
 				message += `💵 <b>${date}</b> - ${tx.description}\n`;
-				message += `   $${amount.toFixed(2)} by @${userName} (${splitCount} people)\n\n`;
+				message += `   ${formatMoney(amount)} by @${userName} (${splitCount} people)\n\n`;
 			} else {
 				// Settlement
 				const toUserName = tx.toUsername || tx.toFirstName || 'Unknown';
 				message += `💰 <b>${date}</b>\n`;
-				message += `   @${userName} → @${toUserName}: $${amount.toFixed(2)}\n\n`;
+				message += `   @${userName} → @${toUserName}: ${formatMoney(amount)}\n\n`;
 			}
 		}
 
@@ -194,10 +195,10 @@ async function handlePersonalHistory(ctx: Context, db: Database, userId: string)
 		for (const tx of recentTransactions) {
 			const date = new Date(tx.createdAt).toLocaleDateString();
 			const category = tx.category ? `[${tx.category}]` : '';
-			const amount = parseDecimal(tx.amount);
-			
+			const amount = Money.fromDatabase(tx.amount);
+
 			message += `💵 <b>${date}</b> - ${tx.description} ${category}\n`;
-			message += `   $${amount.toFixed(2)}\n\n`;
+			message += `   ${formatMoney(amount)}\n\n`;
 		}
 
 		await ctx.reply(message, {

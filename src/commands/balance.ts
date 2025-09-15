@@ -1,12 +1,13 @@
 /**
- * Example conversion of balance.ts from D1 to Drizzle ORM
- * This shows how to migrate commands to use CockroachDB
+ * Balance command - Shows current balances for the group
+ * Uses Money class for accurate financial calculations
  */
 
 import { Context } from 'grammy';
-import { eq, and, sql, desc, isNull } from 'drizzle-orm';
-import { createDb, withRetry, parseDecimal } from '../db';
+import { eq, and, sql, desc, isNull, inArray } from 'drizzle-orm';
+import { createDb, withRetry } from '../db';
 import { expenses, expenseSplits, settlements, groups, users, trips } from '../db/schema';
+import { Money, sumMoney, formatMoney } from '../utils/money';
 import type { Env } from '../index';
 
 export async function handleBalance(ctx: Context, env: Env, tripId?: string) {
@@ -122,25 +123,29 @@ export async function handleBalance(ctx: Context, env: Env, tripId?: string) {
                 );
 
             // Calculate net balances
-            const userBalances: Record<string, number> = {};
+            const userBalances: Record<string, Money> = {};
 
             // Add amounts paid by users
             for (const expense of groupExpenses) {
-                const amount = parseDecimal(expense.amount);
-                userBalances[expense.paidBy] = (userBalances[expense.paidBy] || 0) + amount;
+                const amount = Money.fromDatabase(expense.amount);
+                const currentBalance = userBalances[expense.paidBy] || new Money(0);
+                userBalances[expense.paidBy] = currentBalance.add(amount);
             }
 
             // Subtract amounts owed by users
             for (const split of splits) {
-                const amount = parseDecimal(split.amount);
-                userBalances[split.userId] = (userBalances[split.userId] || 0) - amount;
+                const amount = Money.fromDatabase(split.amount);
+                const currentBalance = userBalances[split.userId] || new Money(0);
+                userBalances[split.userId] = currentBalance.subtract(amount);
             }
 
             // Apply settlements
             for (const settlement of groupSettlements) {
-                const amount = parseDecimal(settlement.amount);
-                userBalances[settlement.fromUser] = (userBalances[settlement.fromUser] || 0) - amount;
-                userBalances[settlement.toUser] = (userBalances[settlement.toUser] || 0) + amount;
+                const amount = Money.fromDatabase(settlement.amount);
+                const fromBalance = userBalances[settlement.fromUser] || new Money(0);
+                const toBalance = userBalances[settlement.toUser] || new Money(0);
+                userBalances[settlement.fromUser] = fromBalance.subtract(amount);
+                userBalances[settlement.toUser] = toBalance.add(amount);
             }
 
             return userBalances;
@@ -156,7 +161,7 @@ export async function handleBalance(ctx: Context, env: Env, tripId?: string) {
                     username: users.username
                 })
                 .from(users)
-                .where(sql`${users.telegramId} IN ${userIds}`);
+                .where(userIds.length > 0 ? inArray(users.telegramId, userIds) : sql`1=0`);
         });
 
         // Create user map for easy lookup
@@ -173,8 +178,12 @@ export async function handleBalance(ctx: Context, env: Env, tripId?: string) {
         
         // Sort users by balance (creditors first)
         const sortedUsers = Object.entries(balances)
-            .filter(([_, balance]) => Math.abs(balance) > 0.01)
-            .sort(([, a], [, b]) => b - a);
+            .filter(([_, balance]) => !balance.abs().isLessThan(new Money(0.01)))
+            .sort(([, a], [, b]) => {
+                if (a.isGreaterThan(b)) return -1;
+                if (a.isLessThan(b)) return 1;
+                return 0;
+            });
 
         if (sortedUsers.length === 0) {
             message += '✅ All settled up!';
@@ -182,11 +191,11 @@ export async function handleBalance(ctx: Context, env: Env, tripId?: string) {
             for (const [userId, balance] of sortedUsers) {
                 const user = userMap[userId];
                 const name = user?.firstName || user?.username || 'Unknown';
-                
-                if (balance > 0.01) {
-                    message += `👤 ${name}: *+$${balance.toFixed(2)}* (owed)\n`;
-                } else if (balance < -0.01) {
-                    message += `👤 ${name}: *-$${Math.abs(balance).toFixed(2)}* (owes)\n`;
+
+                if (balance.isGreaterThan(new Money(0.01))) {
+                    message += `👤 ${name}: *+${formatMoney(balance)}* (owed)\n`;
+                } else if (balance.isLessThan(new Money(-0.01))) {
+                    message += `👤 ${name}: *-${formatMoney(balance.abs())}* (owes)\n`;
                 }
             }
 
@@ -206,46 +215,46 @@ export async function handleBalance(ctx: Context, env: Env, tripId?: string) {
 }
 
 function calculateSettlements(
-    balances: Record<string, number>,
+    balances: Record<string, Money>,
     userMap: Record<string, { firstName: string | null; username: string | null }>
 ): string[] {
     const suggestions: string[] = [];
-    const debtors: Array<[string, number]> = [];
-    const creditors: Array<[string, number]> = [];
+    const debtors: Array<[string, Money]> = [];
+    const creditors: Array<[string, Money]> = [];
 
     // Separate debtors and creditors
     for (const [userId, balance] of Object.entries(balances)) {
-        if (balance > 0.01) {
+        if (balance.isGreaterThan(new Money(0.01))) {
             creditors.push([userId, balance]);
-        } else if (balance < -0.01) {
-            debtors.push([userId, Math.abs(balance)]);
+        } else if (balance.isLessThan(new Money(-0.01))) {
+            debtors.push([userId, balance.abs()]);
         }
     }
 
     // Sort for optimal settlements
-    debtors.sort((a, b) => b[1] - a[1]);
-    creditors.sort((a, b) => b[1] - a[1]);
+    debtors.sort((a, b) => b[1].isGreaterThan(a[1]) ? 1 : -1);
+    creditors.sort((a, b) => b[1].isGreaterThan(a[1]) ? 1 : -1);
 
     // Generate settlement suggestions
     let i = 0, j = 0;
     while (i < debtors.length && j < creditors.length) {
         const [debtorId, debtAmount] = debtors[i];
         const [creditorId, creditAmount] = creditors[j];
-        
+
         const debtorName = userMap[debtorId]?.firstName || userMap[debtorId]?.username || 'Unknown';
         const creditorName = userMap[creditorId]?.firstName || userMap[creditorId]?.username || 'Unknown';
-        
-        const settleAmount = Math.min(debtAmount, creditAmount);
-        
-        if (settleAmount > 0.01) {
-            suggestions.push(`• ${debtorName} → ${creditorName}: $${settleAmount.toFixed(2)}`);
+
+        const settleAmount = debtAmount.isLessThan(creditAmount) ? debtAmount : creditAmount;
+
+        if (settleAmount.isGreaterThan(new Money(0.01))) {
+            suggestions.push(`• ${debtorName} → ${creditorName}: ${formatMoney(settleAmount)}`);
         }
-        
-        debtors[i][1] -= settleAmount;
-        creditors[j][1] -= settleAmount;
-        
-        if (debtors[i][1] < 0.01) i++;
-        if (creditors[j][1] < 0.01) j++;
+
+        debtors[i][1] = debtors[i][1].subtract(settleAmount);
+        creditors[j][1] = creditors[j][1].subtract(settleAmount);
+
+        if (debtors[i][1].isLessThan(new Money(0.01))) i++;
+        if (creditors[j][1].isLessThan(new Money(0.01))) j++;
     }
 
     return suggestions;

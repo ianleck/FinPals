@@ -1,6 +1,6 @@
 import { Context } from 'grammy';
-import { eq, and, sql } from 'drizzle-orm';
-import { type Database, withRetry, formatAmount } from '../db';
+import { eq, and, sql, inArray } from 'drizzle-orm';
+import { type Database, withRetry } from '../db';
 import { users, groups, groupMembers, expenses, expenseSplits } from '../db/schema';
 import { ERROR_MESSAGES } from '../utils/constants';
 import { replyAndCleanup, MESSAGE_LIFETIMES } from '../utils/message';
@@ -8,6 +8,7 @@ import { extractNote } from '../utils/note-parser';
 import { parseEnhancedSplits } from '../utils/split-parser';
 import { formatCurrency } from '../utils/currency';
 import { createExpenseActionButtons } from '../utils/button-helpers';
+import { Money, parseMoney } from '../utils/money';
 
 const WARNINGS = {
 	NOT_ENROLLED: (mention: string) => `\n⚠️ ${mention} will be notified when they start using FinPals`,
@@ -95,8 +96,8 @@ export async function handleAdd(ctx: Context, db: Database) {
 	}
 
 	// Parse amount
-	const amount = parseFloat(args[0]);
-	if (isNaN(amount) || amount <= 0) {
+	const amount = parseMoney(args[0]);
+	if (!amount || amount.isZero() || amount.isNegative()) {
 		await replyAndCleanup(ctx, ERROR_MESSAGES.INVALID_AMOUNT, {}, MESSAGE_LIFETIMES.ERROR);
 		return;
 	}
@@ -178,8 +179,8 @@ export async function handleAdd(ctx: Context, db: Database) {
 			}
 
 			// Parse participants for splits
-			let participants: Array<{ userId: string; splitAmount: number }> = [];
-			
+			let participants: Array<{ userId: string; splitAmount: Money }> = [];
+
 			if (isPersonal) {
 				// Personal expense - only the user pays and owes
 				participants = [{ userId: userId, splitAmount: amount }];
@@ -187,7 +188,7 @@ export async function handleAdd(ctx: Context, db: Database) {
 				// Parse mentions and splits
 				let parsedSplits;
 				try {
-					parsedSplits = parseEnhancedSplits(mentionArgs, amount);
+					parsedSplits = parseEnhancedSplits(mentionArgs, amount.toNumber());
 				} catch (error: any) {
 					throw new Error(`Split parsing error: ${error.message}`);
 				}
@@ -229,10 +230,10 @@ export async function handleAdd(ctx: Context, db: Database) {
 						);
 
 					if (members.length > 0) {
-						const splitAmount = amount / members.length;
-						participants = members.map(m => ({ 
-							userId: m.userId, 
-							splitAmount: splitAmount 
+						const splitAmounts = amount.splitEvenly(members.length);
+						participants = members.map((m, index) => ({
+							userId: m.userId,
+							splitAmount: splitAmounts[index]
 						}));
 					} else {
 						// Fallback to just the payer
@@ -251,33 +252,37 @@ export async function handleAdd(ctx: Context, db: Database) {
 						.where(
 							and(
 								eq(groupMembers.groupId, groupId!),
-								sql`${users.username} IN ${usernames}`
+								usernames.length > 0 ? inArray(users.username, usernames) : sql`1=0`
 							)
 						);
 
 					// Calculate splits for found users
-					const splitAmount = amount / (mentionedUsers.length || 1);
-					participants = mentionedUsers.map(u => ({
+					const participantCount = mentionedUsers.length || 1;
+					let splitAmounts = amount.splitEvenly(participantCount);
+					participants = mentionedUsers.map((u, index) => ({
 						userId: u.telegramId,
-						splitAmount: splitAmount
+						splitAmount: splitAmounts[index]
 					}));
 
 					// Always include the payer if not already included
 					if (!participants.some(p => p.userId === paidBy)) {
-						participants.push({ userId: paidBy, splitAmount: splitAmount });
-						// Recalculate splits
-						const newSplitAmount = amount / participants.length;
-						participants.forEach(p => p.splitAmount = newSplitAmount);
+						participants.push({ userId: paidBy, splitAmount: new Money(0) });
+						// Recalculate splits with new participant count
+						splitAmounts = amount.splitEvenly(participants.length);
+						participants = participants.map((p, index) => ({
+							...p,
+							splitAmount: splitAmounts[index]
+						}));
 					}
 				}
 
 				// Update the expense creation to use correct paidBy
-				const category = suggestCategory(description, amount);
+				const category = suggestCategory(description, amount.toNumber());
 
 				// Create the expense record
 				const [expense] = await db.insert(expenses).values({
 					groupId: isPersonal ? null : groupId,
-					amount: formatAmount(amount),
+					amount: amount.toDatabase(),
 					currency: 'USD',
 					description: description,
 					category: category,
@@ -293,7 +298,7 @@ export async function handleAdd(ctx: Context, db: Database) {
 						participants.map(p => ({
 							expenseId: expense.id,
 							userId: p.userId,
-							amount: formatAmount(p.splitAmount)
+							amount: p.splitAmount.toDatabase()
 						}))
 					);
 				}
@@ -303,11 +308,11 @@ export async function handleAdd(ctx: Context, db: Database) {
 
 			// For personal expenses, create the expense
 			if (isPersonal) {
-				const category = suggestCategory(description, amount);
-				
+				const category = suggestCategory(description, amount.toNumber());
+
 				const [expense] = await db.insert(expenses).values({
 					groupId: null,
-					amount: formatAmount(amount),
+					amount: amount.toDatabase(),
 					currency: 'USD',
 					description: description,
 					category: category,
@@ -321,7 +326,7 @@ export async function handleAdd(ctx: Context, db: Database) {
 				await db.insert(expenseSplits).values({
 					expenseId: expense.id,
 					userId: userId,
-					amount: formatAmount(amount)
+					amount: amount.toDatabase()
 				});
 
 				return expense;
@@ -333,13 +338,13 @@ export async function handleAdd(ctx: Context, db: Database) {
 		const currency = 'USD'; // TODO: Get from group or user settings
 		if (isPersonal) {
 			message = `✅ Personal expense added!\n\n` +
-				`💰 Amount: ${formatCurrency(amount, currency)}\n` +
+				`💰 Amount: ${formatCurrency(amount.toNumber(), currency)}\n` +
 				`📝 Description: ${description}\n` +
 				`${note ? `📌 Note: ${note}\n` : ''}`;
 		} else {
 			const participantCount = result ? 1 : 0; // Simplified for now
 			message = `✅ Expense added successfully!\n\n` +
-				`💰 Amount: ${formatCurrency(amount, currency)}\n` +
+				`💰 Amount: ${formatCurrency(amount.toNumber(), currency)}\n` +
 				`📝 Description: ${description}\n` +
 				`👥 Split between ${participantCount} people\n` +
 				`${note ? `📌 Note: ${note}\n` : ''}`;
