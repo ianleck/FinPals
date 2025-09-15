@@ -44,6 +44,7 @@ export default [
       // General rules
       'no-console': ['warn', { allow: ['warn', 'error'] }],
       'no-undef': 'off', // TypeScript handles this
+      'no-unused-vars': 'off', // Use @typescript-eslint/no-unused-vars instead
     },
   },
 
