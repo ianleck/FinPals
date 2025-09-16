@@ -57,7 +57,7 @@ const worker = {
 
 		// Test endpoint
 		if (url.pathname === '/test' && request.method === 'GET') {
-			return new Response('Bot is running! Set webhook to: ' + request.url.replace('/test', ''), {
+			return new Response('Bot is running! Webhook endpoint: ' + request.url.replace('/test', ''), {
 				status: 200,
 				headers: corsHeaders,
 			});
@@ -87,14 +87,20 @@ const worker = {
 			const db = createDb(env);
 
 			// Handle bot being added to groups
-			bot.on('chat_member', async (ctx) => {
-				if (ctx.chatMember.new_chat_member.status === 'member' && ctx.chatMember.new_chat_member.user.id === ctx.me.id) {
+			bot.on('my_chat_member', async (ctx) => {
+				logger.info('my_chat_member event', {
+					newStatus: ctx.myChatMember.new_chat_member.status,
+					chatType: ctx.chat.type,
+					chatId: ctx.chat.id,
+				});
+
+				// Bot was added to a group
+				if (ctx.myChatMember.new_chat_member.status === 'member' && ctx.chat.type !== 'private') {
 					await handleStart(ctx, db);
 				}
-			});
 
-			bot.on('my_chat_member', async (ctx) => {
-				if (ctx.myChatMember.new_chat_member.status === 'member' && ctx.chat.type !== 'private') {
+				// Bot was made admin in a group
+				if (ctx.myChatMember.new_chat_member.status === 'administrator' && ctx.chat.type !== 'private') {
 					await handleStart(ctx, db);
 				}
 			});
@@ -113,6 +119,7 @@ const worker = {
 			// Process webhook
 			const response = await webhookCallback(bot, 'cloudflare-mod', {
 				secretToken: env.TELEGRAM_BOT_API_SECRET_TOKEN,
+				timeoutMilliseconds: 25000,
 			})(request);
 
 			// Add CORS headers
@@ -127,8 +134,12 @@ const worker = {
 				headers: newHeaders,
 			});
 		} catch (error) {
-			logger.error('Error in bot', error);
-			return new Response('FinPals - Telegram Expense Splitting Bot', {
+			logger.error('Error in bot', {
+				error: error instanceof Error ? error.message : String(error),
+				stack: error instanceof Error ? error.stack : undefined,
+			});
+			// Return 200 OK to prevent Telegram from retrying
+			return new Response('OK', {
 				status: 200,
 				headers: { ...corsHeaders, 'content-type': 'text/plain' },
 			});

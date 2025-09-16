@@ -351,7 +351,7 @@ npx tsc --noEmit 2>&1 | grep -E "^src/(index|commands/[^/]+\.ts|utils/[^/]+\.ts|
 1. Push to main branch
 2. Run tests and type checking
 3. Deploy to Cloudflare Workers
-4. Update webhook configuration
+4. Webhook configuration (set externally via Telegram API)
 5. Verify health checks
 
 ### Rollback Strategy
