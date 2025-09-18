@@ -41,7 +41,12 @@
       "Bash(npx eslint:*)",
       "Bash(awk:*)",
       "Bash(git diff:*)",
-      "Bash(npx wrangler tail:*)"
+      "Bash(npx wrangler tail:*)",
+      "Bash(pnpm import:*)",
+      "Bash(pnpm install:*)",
+      "Bash(pnpm approve-builds:*)",
+      "Bash(pnpm remove:*)",
+      "Bash(WRANGLER_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE=\"postgresql://ianleck:password@localhost:5432/finpals_dev\" pnpm dev)"
     ],
     "deny": []
   },

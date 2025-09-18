@@ -41,4 +41,4 @@ new_sqlite_classes = ["SessionDO"]
 [[hyperdrive]]
 binding = "HYPERDRIVE"
 id = "7d0cebc7c9394008a9cfdbd3e2aea5c4"
-# For local development, set HYPERDRIVE_LOCAL_CONNECTION_STRING in .dev.vars
+# For local development, set WRANGLER_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE in .dev.vars

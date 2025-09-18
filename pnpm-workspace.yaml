@@ -1,0 +1,27 @@
+packages:
+  - '.'
+
+# pnpm configuration settings
+# See: https://pnpm.io/settings
+
+# Security settings
+minimum-release-age: 1440  # Minimum package age in minutes (24 hours)
+ignore-scripts: true        # Don't run install scripts automatically
+
+# Dependency resolution
+auto-install-peers: true
+strict-peer-dependencies: false
+save-exact: true
+
+# Performance
+resolution-mode: highest
+
+# CI/CD settings
+frozen-lockfile: true
+engine-strict: true
+
+# Build dependencies to ignore (pnpm won't run their install scripts)
+ignoredBuiltDependencies:
+  - esbuild
+  - sharp
+  - workerd
