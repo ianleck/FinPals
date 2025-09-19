@@ -36,7 +36,6 @@
 			"Bash(pnpm install:*)",
 			"Bash(pnpm approve-builds:*)",
 			"Bash(pnpm remove:*)",
-			"Bash(WRANGLER_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE=\"postgresql://ianleck:password@localhost:5432/finpals_dev\" pnpm dev)",
 			"Bash(pnpm:*)"
 		],
 		"deny": []
