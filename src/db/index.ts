@@ -8,19 +8,15 @@ export type Database = ReturnType<typeof createDb>;
  * Creates a Drizzle database instance using Hyperdrive connection
  */
 export function createDb(env: { HYPERDRIVE: { connectionString: string } }) {
-	console.log('[DB] Creating database connection', {
-		connectionString: env.HYPERDRIVE.connectionString.replace(/:[^@]+@/, ':***@'), // Hide password in logs
-	});
-
 	const sql = postgres(env.HYPERDRIVE.connectionString, {
 		prepare: false, // Required for Cloudflare Workers edge runtime
-		ssl: 'require', // CockroachDB requires SSL
+		ssl: false, // Hyperdrive handles SSL termination internally
 		connection: {
 			application_name: 'finpals-telegram',
 		},
-		max: 1, // Limit connections in Workers environment
+		max: 1, // Workers environment limitation
 		idle_timeout: 20,
-		connect_timeout: 10,
+		connect_timeout: 15, // Balance between reliability and responsiveness
 	});
 
 	return drizzle(sql, { schema });
@@ -36,11 +32,9 @@ export async function withRetry<T>(fn: () => Promise<T>, maxRetries = 3, initial
 
 	for (let i = 0; i < maxRetries; i++) {
 		try {
-			console.log(`[DB] Retry attempt ${i + 1}/${maxRetries}`);
 			return await fn();
 		} catch (error: any) {
 			lastError = error;
-			console.error(`[DB] Database error on attempt ${i + 1}:`, error.message);
 
 			// Check for CockroachDB serialization error
 			if (error.code === '40001' && i < maxRetries - 1) {

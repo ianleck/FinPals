@@ -70,22 +70,12 @@ const worker = {
 
 		// Handle bot webhook
 		try {
-			logger.info('Webhook request received', {
-				path: url.pathname,
-				method: request.method,
-			});
-
 			const bot = new Bot<MyContext>(env.BOT_TOKEN);
 
 			// Track group metadata
 			bot.use(async (ctx, next) => {
 				ctx.env = env;
 				try {
-					logger.info('Processing update', {
-						updateType: ctx.updateType,
-						chatType: ctx.chat?.type,
-						userId: ctx.from?.id,
-					});
 					await trackGroupMetadata(ctx);
 				} catch (error) {
 					logger.error('Error tracking group metadata', error);
@@ -94,7 +84,6 @@ const worker = {
 			});
 
 			// Create database instance
-			logger.info('Creating database connection');
 			const db = createDb(env);
 
 			// Handle bot being added to groups
@@ -128,12 +117,10 @@ const worker = {
 			registerTextHandlers(bot, db);
 
 			// Process webhook
-			logger.info('Processing webhook callback');
 			const response = await webhookCallback(bot, 'cloudflare-mod', {
 				secretToken: env.TELEGRAM_BOT_API_SECRET_TOKEN,
 				timeoutMilliseconds: 25000,
 			})(request);
-			logger.info('Webhook processed successfully');
 
 			// Add CORS headers
 			const newHeaders = new Headers(response.headers);

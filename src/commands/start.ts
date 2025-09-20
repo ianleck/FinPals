@@ -5,28 +5,17 @@ import { users, groups, groupMembers } from '../db/schema';
 import { WelcomeMessage } from '../utils/constants';
 
 export async function handleStart(ctx: Context, db: Database) {
-	console.log('[START] handleStart called');
 	const chatType = ctx.chat?.type;
 	const username = ctx.from?.username || ctx.from?.first_name || 'there';
 	const userId = ctx.from?.id.toString();
 	const chatId = ctx.chat?.id.toString();
 
-	console.log('[START] Context info', {
-		chatType,
-		userId,
-		chatId,
-		username,
-	});
-
 	if (chatType === 'private') {
 		// Initialize user in database if not exists
 		if (userId) {
-			console.log('[START] Initializing user in database');
 			await withRetry(async () => {
 				// Check if user exists
-				console.log('[START] Checking if user exists');
 				const existingUser = await db.select().from(users).where(eq(users.telegramId, userId)).limit(1);
-				console.log('[START] User exists?', existingUser.length > 0);
 
 				if (existingUser.length === 0) {
 					// Insert new user
