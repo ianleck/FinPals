@@ -1,122 +1,132 @@
-// Currency conversion utilities
-// Supports both mock rates and real-time rates from exchangerate-api.com
+/**
+ * Currency conversion and formatting utilities
+ * Uses Frankfurter API for real-time exchange rates with caching
+ */
 
 import { eq, gt } from 'drizzle-orm';
 import type { Database } from '../db';
 import { users, exchangeRates } from '../db/schema';
 import { logger } from './logger';
-import type { FrankfurterResponse } from '../types/common';
 
-const MOCK_RATES: { [key: string]: number } = {
-	USD: 1,
-	EUR: 0.88, // Euro (as of Jan 2025)
-	GBP: 0.74, // British Pound
-	JPY: 145.06, // Japanese Yen
-	CNY: 7.19, // Chinese Yuan
-	SGD: 1.29, // Singapore Dollar
-	INR: 85.49, // Indian Rupee
-	AUD: 1.54, // Australian Dollar
-	CAD: 1.37, // Canadian Dollar
-	// Additional currencies
-	KRW: 1373.15, // Korean Won
-	THB: 32.59, // Thai Baht
-	MYR: 4.24, // Malaysian Ringgit
-	PHP: 55.85, // Philippine Peso
-	IDR: 16262.8, // Indonesian Rupiah
-	VND: 26027.43, // Vietnamese Dong
-	HKD: 7.85, // Hong Kong Dollar
-	TWD: 29.91, // Taiwan Dollar
-	NZD: 1.66, // New Zealand Dollar
-	CHF: 0.82, // Swiss Franc
-	SEK: 9.61, // Swedish Krona
-	NOK: 10.1, // Norwegian Krone
-	DKK: 6.53, // Danish Krone
-	ZAR: 17.71, // South African Rand
-	AED: 3.67, // UAE Dirham (pegged)
-	SAR: 3.75, // Saudi Riyal (pegged)
-	BRL: 5.57, // Brazilian Real
-	MXN: 19.04, // Mexican Peso
-	TRY: 39.18, // Turkish Lira
-	RUB: 78.48, // Russian Ruble
-};
+interface ExchangeRateResponse {
+	amount: number;
+	base: string;
+	date: string;
+	rates: Record<string, number>;
+}
 
-// Cache for real-time rates - removed as unused
+// Popular currencies for Southeast Asia region
+const SUPPORTED_CURRENCIES = ['SGD', 'USD', 'EUR', 'GBP', 'JPY', 'MYR', 'THB', 'IDR', 'PHP', 'VND', 'CNY', 'HKD', 'TWD', 'KRW', 'INR', 'AUD', 'CAD', 'NZD'];
+
+// Cache duration for exchange rates
 const CACHE_DURATION = 3600000; // 1 hour in milliseconds
 
-// Update exchange rates in database
-export async function updateExchangeRatesInDB(db: Database): Promise<boolean> {
+/**
+ * Fetch exchange rates from Frankfurter API (free, no key required)
+ * Frankfurter supports SGD and most major currencies
+ */
+async function fetchRatesFromAPI(baseCurrency: string = 'SGD'): Promise<Record<string, number>> {
 	try {
-		// Try to fetch from Frankfurter API (free, no key needed)
-		const response = await fetch('https://api.frankfurter.app/latest?from=USD');
+		// Frankfurter API - free, reliable, supports SGD
+		const symbols = SUPPORTED_CURRENCIES.filter(c => c !== baseCurrency).join(',');
+		const url = `https://api.frankfurter.dev/latest?base=${baseCurrency}&symbols=${symbols}`;
+
+		const response = await fetch(url);
 		if (!response.ok) {
-			logger.error('Failed to fetch rates from Frankfurter', response.statusText);
-			return false;
+			throw new Error(`API returned ${response.status}: ${response.statusText}`);
 		}
 
-		const data = (await response.json()) as FrankfurterResponse;
-		const rates: Record<string, number> = { USD: 1 };
+		const data = await response.json() as ExchangeRateResponse;
 
-		// Convert the rates to USD base
-		for (const [currency, rate] of Object.entries(data.rates)) {
-			rates[currency] = rate;
-		}
+		// Include the base currency with rate 1
+		return {
+			[baseCurrency]: 1,
+			...data.rates
+		};
+	} catch (error) {
+		logger.error('Failed to fetch exchange rates from API', error);
+		throw error;
+	}
+}
 
-		// Update all rates in database
-		const updatePromises = Object.entries(rates).map(([currency, rate]) =>
-			db
+/**
+ * Update exchange rates in database
+ * Fetches fresh rates and stores them for caching
+ */
+export async function updateExchangeRatesInDB(db: Database, baseCurrency: string = 'SGD'): Promise<Record<string, number> | null> {
+	try {
+		const freshRates = await fetchRatesFromAPI(baseCurrency);
+
+		// Store rates directly with baseCurrency as reference
+		for (const [currency, rate] of Object.entries(freshRates)) {
+			await db
 				.insert(exchangeRates)
 				.values({
 					currencyCode: currency,
-					rateToUsd: rate.toString(),
+					rateToUsd: rate.toFixed(10), // Store relative to base, not USD
 					source: 'frankfurter',
 					lastUpdated: new Date(),
 				})
 				.onConflictDoUpdate({
 					target: exchangeRates.currencyCode,
 					set: {
-						rateToUsd: rate.toString(),
-						source: 'frankfurter',
+						rateToUsd: rate.toFixed(10),
 						lastUpdated: new Date(),
 					},
-				}),
-		);
+				});
+		}
 
-		await Promise.all(updatePromises);
-		logger.info(`Successfully updated ${Object.keys(rates).length} exchange rates`);
-		return true;
+		logger.info(`Successfully updated ${Object.keys(freshRates).length} exchange rates`);
+		return freshRates; // Return the rates to avoid re-fetching
 	} catch (error) {
 		logger.error('Error updating exchange rates', error);
-		return false;
+		return null;
 	}
 }
 
-// Get exchange rates from database
-export async function getExchangeRatesFromDB(db: Database): Promise<{ [key: string]: number } | null> {
+/**
+ * Get exchange rates with caching
+ * Returns cached rates if fresh, otherwise fetches new rates
+ */
+export async function getExchangeRates(
+	db: Database,
+	baseCurrency: string = 'SGD',
+	maxAge: number = CACHE_DURATION
+): Promise<Record<string, number>> {
 	try {
-		const oneDayAgo = new Date();
-		oneDayAgo.setHours(oneDayAgo.getHours() - 24);
-
-		const results = await db
-			.select({
-				currencyCode: exchangeRates.currencyCode,
-				rateToUsd: exchangeRates.rateToUsd,
-			})
+		// Check cache first
+		const cacheTime = new Date(Date.now() - maxAge);
+		const cached = await db
+			.select()
 			.from(exchangeRates)
-			.where(gt(exchangeRates.lastUpdated, oneDayAgo));
+			.where(gt(exchangeRates.lastUpdated, cacheTime));
 
-		if (!results || results.length === 0) {
-			return null;
+		if (cached.length > 0) {
+			// Build rates from cache relative to base currency
+			const rates: Record<string, number> = {};
+			const baseRate = cached.find(r => r.currencyCode === baseCurrency);
+
+			if (baseRate) {
+				for (const rate of cached) {
+					// Calculate rate relative to requested base
+					rates[rate.currencyCode] = Number(rate.rateToUsd) / Number(baseRate.rateToUsd);
+				}
+				return rates;
+			}
 		}
 
-		const rates: { [key: string]: number } = {};
-		results.forEach((row) => {
-			rates[row.currencyCode] = parseFloat(row.rateToUsd);
-		});
-
-		return rates;
+		// Cache miss or stale, fetch and update
+		const freshRates = await updateExchangeRatesInDB(db, baseCurrency);
+		return freshRates || {};
 	} catch (error) {
-		logger.error('Error getting exchange rates from DB', error);
-		return null;
+		logger.error('Failed to get exchange rates', error);
+
+		// Return fallback rates (1:1) if all else fails
+		const fallbackRates: Record<string, number> = {};
+		for (const currency of SUPPORTED_CURRENCIES) {
+			fallbackRates[currency] = currency === baseCurrency ? 1 : 1;
+		}
+		return fallbackRates;
 	}
 }
 
@@ -126,7 +136,7 @@ export const CURRENCY_SYMBOLS: { [key: string]: string } = {
 	GBP: '£',
 	JPY: '¥',
 	CNY: '¥',
-	SGD: '$',
+	SGD: 'S$', // Singapore Dollar
 	INR: '₹',
 	AUD: 'A$',
 	CAD: 'C$',
@@ -153,42 +163,79 @@ export const CURRENCY_SYMBOLS: { [key: string]: string } = {
 	RUB: '₽',
 };
 
-export async function convertCurrency(amount: number, from: string, to: string, db?: Database): Promise<number> {
-	// Try to get rates from database first
-	if (db) {
-		const dbRates = await getExchangeRatesFromDB(db);
-		if (dbRates) {
-			const fromRate = dbRates[from] || 1;
-			const toRate = dbRates[to] || 1;
-			return amount * (toRate / fromRate);
+/**
+ * Convert amount between currencies using real exchange rates
+ */
+export async function convertCurrency(
+	db: Database,
+	amount: number,
+	from: string,
+	to: string
+): Promise<number> {
+	if (from === to) {
+		return amount;
+	}
+
+	try {
+		// Get rates based on fromCurrency as base
+		const rates = await getExchangeRates(db, from);
+		const rate = rates[to];
+
+		if (!rate) {
+			logger.warn(`No exchange rate found for ${from} to ${to}`);
+			return amount; // Return original amount if rate not found
 		}
-	}
 
-	// Fall back to mock rates
-	const fromRate = MOCK_RATES[from] || 1;
-	const toRate = MOCK_RATES[to] || 1;
-	return amount * (toRate / fromRate);
+		return amount * rate;
+	} catch (error) {
+		logger.error(`Failed to convert ${amount} from ${from} to ${to}`, error);
+		return amount; // Return original amount on error
+	}
 }
 
-// Get latest exchange rates (synchronous for calculations)
-let cachedRates: { [key: string]: number } | null = null;
+// Cached rates for synchronous operations
+let cachedRates: Record<string, number> | null = null;
 let cacheExpiry = 0;
+let cacheBase = 'SGD';
 
-export async function refreshRatesCache(db: Database): Promise<void> {
-	const dbRates = await getExchangeRatesFromDB(db);
-	if (dbRates) {
-		cachedRates = dbRates;
+/**
+ * Refresh the rates cache for synchronous operations
+ */
+export async function refreshRatesCache(db: Database, baseCurrency: string = 'SGD'): Promise<void> {
+	try {
+		const rates = await getExchangeRates(db, baseCurrency);
+		cachedRates = rates;
 		cacheExpiry = Date.now() + CACHE_DURATION;
+		cacheBase = baseCurrency;
+	} catch (error) {
+		logger.error('Failed to refresh rates cache', error);
 	}
 }
 
-// Enhanced synchronous version that uses cached DB rates if available
+/**
+ * Synchronous currency conversion using cached rates
+ * Falls back to 1:1 if no rates available
+ */
 export function convertCurrencySync(amount: number, from: string, to: string): number {
-	// Use cached rates if available and not expired
-	const rates = cachedRates && Date.now() < cacheExpiry ? cachedRates : MOCK_RATES;
-	const fromRate = rates[from] || 1;
-	const toRate = rates[to] || 1;
-	return amount * (toRate / fromRate);
+	if (from === to) return amount;
+
+	// If no cache or expired, return original amount
+	if (!cachedRates || Date.now() > cacheExpiry) {
+		logger.warn('No cached rates available for sync conversion');
+		return amount;
+	}
+
+	// Convert via base currency if needed
+	if (cacheBase === from) {
+		return amount * (cachedRates[to] || 1);
+	} else if (cacheBase === to) {
+		return amount / (cachedRates[from] || 1);
+	} else {
+		// Convert through base currency
+		const fromRate = cachedRates[from] || 1;
+		const toRate = cachedRates[to] || 1;
+		return amount * (toRate / fromRate);
+	}
 }
 
 export function formatCurrency(amount: number, currency: string): string {
@@ -244,7 +291,7 @@ export function parseCurrencyFromText(text: string): { amount: number; currency:
 				// Symbol first
 				const symbol = match[1];
 				const amount = parseFloat(match[2]);
-				const currency = Object.entries(CURRENCY_SYMBOLS).find(([, s]) => s === symbol)?.[0] || 'USD';
+				const currency = Object.entries(CURRENCY_SYMBOLS).find(([, s]) => s === symbol)?.[0] || 'SGD';
 				return { amount, currency };
 			} else if (pattern === patterns[1]) {
 				// Amount then code
@@ -253,8 +300,8 @@ export function parseCurrencyFromText(text: string): { amount: number; currency:
 				// Code then amount
 				return { amount: parseFloat(match[2]), currency: match[1].toUpperCase() };
 			} else {
-				// Just a number
-				return { amount: parseFloat(match[1]), currency: 'USD' };
+				// Just a number, default to SGD
+				return { amount: parseFloat(match[1]), currency: 'SGD' };
 			}
 		}
 	}
@@ -265,7 +312,7 @@ export function parseCurrencyFromText(text: string): { amount: number; currency:
 // Get user's preferred currency from database or default
 export async function getUserCurrency(db: Database, userId: string): Promise<string> {
 	const user = await db.select({ preferredCurrency: users.preferredCurrency }).from(users).where(eq(users.telegramId, userId)).limit(1);
-	return user[0]?.preferredCurrency || 'USD';
+	return user[0]?.preferredCurrency || 'SGD';
 }
 
 // Set user's preferred currency

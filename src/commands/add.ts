@@ -307,7 +307,7 @@ export async function handleAdd(ctx: Context, db: Database) {
 
 		// Format success message
 		let message = '';
-		const currency = 'USD'; // TODO: Get from group or user settings
+		const currency = expense.currency || 'SGD'; // Use the expense's currency directly
 		if (isPersonal) {
 			message =
 				`✅ Personal expense added!\n\n` +

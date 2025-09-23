@@ -8,7 +8,7 @@ export const users = pgTable('users', {
 	firstName: text('first_name'),
 	lastName: text('last_name'),
 	timezone: text('timezone').default('UTC'),
-	preferredCurrency: text('preferred_currency').default('USD'),
+	preferredCurrency: text('preferred_currency').default('SGD'),
 	premiumUntil: timestamp('premium_until', { withTimezone: true }),
 	createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
 });
@@ -17,7 +17,7 @@ export const users = pgTable('users', {
 export const groups = pgTable('groups', {
 	telegramId: text('telegram_id').primaryKey(),
 	title: text('title'),
-	defaultCurrency: text('default_currency').default('USD'),
+	defaultCurrency: text('default_currency').default('SGD'),
 	createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
 	active: boolean('active').default(true),
 });
@@ -71,7 +71,7 @@ export const expenses = pgTable(
 		groupId: text('group_id').references(() => groups.telegramId), // NULL for personal expenses
 		tripId: uuid('trip_id').references(() => trips.id),
 		amount: decimal('amount', { precision: 10, scale: 2 }).notNull(),
-		currency: text('currency').default('USD'),
+		currency: text('currency').default('SGD'),
 		description: text('description'),
 		category: text('category'),
 		paidBy: text('paid_by')
@@ -131,7 +131,7 @@ export const settlements = pgTable(
 			.references(() => users.telegramId)
 			.notNull(),
 		amount: decimal('amount', { precision: 10, scale: 2 }).notNull(),
-		currency: text('currency').default('USD'),
+		currency: text('currency').default('SGD'),
 		createdBy: text('created_by')
 			.references(() => users.telegramId)
 			.notNull(),
