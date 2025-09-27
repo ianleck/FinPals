@@ -306,8 +306,12 @@ export async function handleAdd(ctx: Context, db: Database) {
 		});
 
 		// Format success message
+		if (!result) {
+			throw new Error('Failed to create expense');
+		}
+
 		let message = '';
-		const currency = expense.currency || 'SGD'; // Use the expense's currency directly
+		const currency = result.currency || 'SGD'; // Use the expense's currency directly
 		if (isPersonal) {
 			message =
 				`✅ Personal expense added!\n\n` +
@@ -315,7 +319,7 @@ export async function handleAdd(ctx: Context, db: Database) {
 				`📝 Description: ${description}\n` +
 				`${note ? `📌 Note: ${note}\n` : ''}`;
 		} else {
-			const participantCount = result ? 1 : 0; // Simplified for now
+			const participantCount = 1; // Simplified for now
 			message =
 				`✅ Expense added successfully!\n\n` +
 				`💰 Amount: ${formatCurrency(amount.toNumber(), currency)}\n` +
@@ -325,7 +329,7 @@ export async function handleAdd(ctx: Context, db: Database) {
 		}
 
 		// Create action buttons if expense was created
-		const buttons = result ? createExpenseActionButtons(result.id, isPersonal) : undefined;
+		const buttons = createExpenseActionButtons(result.id, isPersonal);
 
 		await ctx.reply(message, {
 			parse_mode: 'HTML',
