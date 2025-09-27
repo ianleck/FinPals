@@ -249,7 +249,7 @@ export function parseMoney(value: string | number): Money | null {
 /**
  * Format money for display with currency symbol
  */
-export function formatMoney(money: Money, currency: string = 'USD'): string {
+export function formatMoney(money: Money, currency: string = 'SGD'): string {
 	const formatter = new Intl.NumberFormat('en-US', {
 		style: 'currency',
 		currency: currency,

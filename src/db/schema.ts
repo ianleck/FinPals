@@ -198,7 +198,7 @@ export const expenseTemplates = pgTable('expense_templates', {
 	groupId: text('group_id').references(() => groups.telegramId),
 	name: text('name').notNull(),
 	amount: decimal('amount', { precision: 10, scale: 2 }).notNull(),
-	currency: text('currency').default('USD'),
+	currency: text('currency').default('SGD'),
 	description: text('description'),
 	category: text('category'),
 	participants: text('participants'), // JSON array of user IDs
@@ -212,7 +212,7 @@ export const recurringExpenses = pgTable('recurring_expenses', {
 		.references(() => groups.telegramId)
 		.notNull(),
 	amount: decimal('amount', { precision: 10, scale: 2 }).notNull(),
-	currency: text('currency').default('USD'),
+	currency: text('currency').default('SGD'),
 	description: text('description').notNull(),
 	category: text('category'),
 	paidBy: text('paid_by')

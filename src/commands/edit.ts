@@ -4,6 +4,7 @@ import { type Database, withRetry, formatAmount, parseDecimal } from '../db';
 import { expenses, expenseSplits, users } from '../db/schema';
 import { reply } from '../utils/reply';
 import { formatCurrency } from '../utils/currency';
+import { DEFAULT_CURRENCY } from '../utils/currency-constants';
 import { parseEnhancedSplits } from '../utils/split-parser';
 import { logger } from '../utils/logger';
 
@@ -137,7 +138,7 @@ export async function handleEdit(ctx: Context, db: Database) {
 					});
 				}
 
-				updateMessage = `✅ Amount updated from ${formatCurrency(currentAmount, expense.currency || 'USD')} to ${formatCurrency(newAmount, expense.currency || 'USD')}`;
+				updateMessage = `✅ Amount updated from ${formatCurrency(currentAmount, expense.currency || DEFAULT_CURRENCY)} to ${formatCurrency(newAmount, expense.currency || DEFAULT_CURRENCY)}`;
 				break;
 			}
 
@@ -269,7 +270,7 @@ export async function handleEdit(ctx: Context, db: Database) {
 				`📝 <b>Expense Details:</b>\n` +
 				`ID: <code>${expenseId}</code>\n` +
 				`Description: ${expense.description || 'No description'}\n` +
-				`Amount: ${formatCurrency(currentAmount, expense.currency || 'USD')}\n` +
+				`Amount: ${formatCurrency(currentAmount, expense.currency || DEFAULT_CURRENCY)}\n` +
 				`Paid by: @${payerName}\n` +
 				`Category: ${expense.category || 'Uncategorized'}`,
 			{
@@ -326,7 +327,7 @@ export async function handleEditCallback(ctx: Context, db: Database, expenseId: 
 			`✏️ <b>Edit Expense</b>\n\n` +
 				`ID: <code>${expenseId}</code>\n` +
 				`Description: ${expense.description || 'No description'}\n` +
-				`Amount: ${formatCurrency(amount, expense.currency || 'USD')}\n` +
+				`Amount: ${formatCurrency(amount, expense.currency || DEFAULT_CURRENCY)}\n` +
 				`Paid by: @${payerName}\n` +
 				`Category: ${expense.category || 'Uncategorized'}\n\n` +
 				`To edit, use:\n` +

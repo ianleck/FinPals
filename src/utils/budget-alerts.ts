@@ -2,6 +2,7 @@ import { Bot, Context } from 'grammy';
 import type { Database } from '../db';
 import { sql } from 'drizzle-orm';
 import { formatCurrency, convertCurrencySync, refreshRatesCache } from './currency';
+import { DEFAULT_CURRENCY } from './currency-constants';
 import { toResultArray, hasResults, getFirstResult } from './db-helpers';
 import { logger } from './logger';
 import type { BudgetWithCurrency, ExpenseRow, CountResult } from '../types/common';
@@ -104,7 +105,7 @@ export async function checkBudgetAlerts(
 		let currentSpent = 0;
 		for (const expense of toResultArray<ExpenseRow>(expenses)) {
 			const amount = expense.amount;
-			const currency = expense.currency || 'USD';
+			const currency = expense.currency || DEFAULT_CURRENCY;
 			currentSpent += currency === budgetCurrency ? amount : convertCurrencySync(amount, currency, budgetCurrency);
 		}
 
