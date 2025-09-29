@@ -201,7 +201,7 @@ describe('Money Parsing', () => {
 describe('Money Formatting', () => {
 	it('should format with USD currency', () => {
 		const money = new Money(1234.56);
-		expect(formatMoney(money)).toBe('$1,234.56');
+		expect(formatMoney(money, 'USD')).toBe('$1,234.56');
 	});
 
 	it('should format with other currencies', () => {
@@ -212,7 +212,7 @@ describe('Money Formatting', () => {
 
 	it('should format zero correctly', () => {
 		const money = new Money(0);
-		expect(formatMoney(money)).toBe('$0.00');
+		expect(formatMoney(money, 'USD')).toBe('$0.00');
 	});
 });
 

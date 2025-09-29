@@ -39,7 +39,8 @@
       "Bash(pnpm:*)",
       "Bash(npx drizzle-kit:*)",
       "Bash(yes)",
-      "Bash(psql:*)"
+      "Bash(psql:*)",
+      "Bash(pkill:*)"
     ],
     "deny": []
   },
