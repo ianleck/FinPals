@@ -9,6 +9,7 @@ import { createDb } from './db';
 import { COMMANDS } from './utils/constants';
 import { trackGroupMetadata } from './utils/group-tracker';
 import { logger } from './utils/logger';
+import { handleAPI } from './api/router';
 
 // Import command handlers
 import { handleStart } from './commands/start';
@@ -36,6 +37,7 @@ export interface Env {
 	ENV: string;
 	HYPERDRIVE: { connectionString: string };
 	SESSIONS: DurableObjectNamespace;
+	KV: KVNamespace;
 }
 
 const corsHeaders = {
@@ -54,6 +56,11 @@ const worker = {
 		}
 
 		const url = new URL(request.url);
+
+		// API routes
+		if (url.pathname.startsWith('/api/v1/')) {
+			return handleAPI(request, env);
+		}
 
 		// Test endpoint
 		if (url.pathname === '/test' && request.method === 'GET') {

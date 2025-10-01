@@ -5,6 +5,50 @@ import { expenses, users, expenseSplits } from '../db/schema';
 import { logger } from '../utils/logger';
 import type { ExpenseWithPayer } from '../types/common';
 
+// Helper function to fetch group expenses with payer info and split counts
+async function fetchGroupExpensesWithDetails(db: Database, groupId: string): Promise<ExpenseWithPayer[]> {
+	return withRetry(async () => {
+		// Get expenses with payer info
+		const expensesWithPayers = await db
+			.select({
+				id: expenses.id,
+				amount: expenses.amount,
+				currency: expenses.currency,
+				description: expenses.description,
+				category: expenses.category,
+				createdAt: expenses.createdAt,
+				createdBy: expenses.createdBy,
+				notes: expenses.notes,
+				payerUsername: users.username,
+				payerFirstName: users.firstName,
+			})
+			.from(expenses)
+			.innerJoin(users, eq(expenses.paidBy, users.telegramId))
+			.where(and(eq(expenses.groupId, groupId), eq(expenses.deleted, false)))
+			.orderBy(desc(expenses.createdAt));
+
+		// Get split counts for each expense
+		const splitCounts = await db
+			.select({
+				expenseId: expenseSplits.expenseId,
+				splitCount: sql<number>`COUNT(*)::int`,
+			})
+			.from(expenseSplits)
+			.innerJoin(expenses, eq(expenseSplits.expenseId, expenses.id))
+			.where(and(eq(expenses.groupId, groupId), eq(expenses.deleted, false)))
+			.groupBy(expenseSplits.expenseId);
+
+		// Create a map of split counts
+		const splitCountMap = new Map(splitCounts.map((sc) => [sc.expenseId, sc.splitCount]));
+
+		// Combine the data
+		return expensesWithPayers.map((exp) => ({
+			...exp,
+			splitCount: splitCountMap.get(exp.id) || 0,
+		}));
+	});
+}
+
 export async function handleExpenses(ctx: Context, db: Database) {
 	const isPersonal = ctx.chat?.type === 'private';
 	const userId = ctx.from?.id.toString();
@@ -29,46 +73,7 @@ export async function handleExpenses(ctx: Context, db: Database) {
 
 	try {
 		// Get all expenses with payer info and split count
-		const expenseList = await withRetry(async () => {
-			// Get expenses with payer info
-			const expensesWithPayers = await db
-				.select({
-					id: expenses.id,
-					amount: expenses.amount,
-					currency: expenses.currency,
-					description: expenses.description,
-					category: expenses.category,
-					createdAt: expenses.createdAt,
-					createdBy: expenses.createdBy,
-					notes: expenses.notes,
-					payerUsername: users.username,
-					payerFirstName: users.firstName,
-				})
-				.from(expenses)
-				.innerJoin(users, eq(expenses.paidBy, users.telegramId))
-				.where(and(eq(expenses.groupId, groupId), eq(expenses.deleted, false)))
-				.orderBy(desc(expenses.createdAt));
-
-			// Get split counts for each expense
-			const splitCounts = await db
-				.select({
-					expenseId: expenseSplits.expenseId,
-					splitCount: sql<number>`COUNT(*)::int`,
-				})
-				.from(expenseSplits)
-				.innerJoin(expenses, eq(expenseSplits.expenseId, expenses.id))
-				.where(and(eq(expenses.groupId, groupId), eq(expenses.deleted, false)))
-				.groupBy(expenseSplits.expenseId);
-
-			// Create a map of split counts
-			const splitCountMap = new Map(splitCounts.map((sc) => [sc.expenseId, sc.splitCount]));
-
-			// Combine the data
-			return expensesWithPayers.map((exp) => ({
-				...exp,
-				splitCount: splitCountMap.get(exp.id) || 0,
-			}));
-		});
+		const expenseList = await fetchGroupExpensesWithDetails(db, groupId);
 
 		if (!expenseList || expenseList.length === 0) {
 			await ctx.reply('📭 <b>No Expenses Yet</b>\n\n' + 'Start tracking expenses with /add', { parse_mode: 'HTML' });
@@ -161,46 +166,7 @@ export async function handleExpenseSelection(ctx: Context, db: Database) {
 
 	try {
 		// Get all expenses again to maintain state
-		const expenseList = await withRetry(async () => {
-			// Get expenses with payer info
-			const expensesWithPayers = await db
-				.select({
-					id: expenses.id,
-					amount: expenses.amount,
-					currency: expenses.currency,
-					description: expenses.description,
-					category: expenses.category,
-					createdAt: expenses.createdAt,
-					createdBy: expenses.createdBy,
-					notes: expenses.notes,
-					payerUsername: users.username,
-					payerFirstName: users.firstName,
-				})
-				.from(expenses)
-				.innerJoin(users, eq(expenses.paidBy, users.telegramId))
-				.where(and(eq(expenses.groupId, groupId), eq(expenses.deleted, false)))
-				.orderBy(desc(expenses.createdAt));
-
-			// Get split counts for each expense
-			const splitCounts = await db
-				.select({
-					expenseId: expenseSplits.expenseId,
-					splitCount: sql<number>`COUNT(*)::int`,
-				})
-				.from(expenseSplits)
-				.innerJoin(expenses, eq(expenseSplits.expenseId, expenses.id))
-				.where(and(eq(expenses.groupId, groupId), eq(expenses.deleted, false)))
-				.groupBy(expenseSplits.expenseId);
-
-			// Create a map of split counts
-			const splitCountMap = new Map(splitCounts.map((sc) => [sc.expenseId, sc.splitCount]));
-
-			// Combine the data
-			return expensesWithPayers.map((exp) => ({
-				...exp,
-				splitCount: splitCountMap.get(exp.id) || 0,
-			}));
-		});
+		const expenseList = await fetchGroupExpensesWithDetails(db, groupId);
 
 		const expense = expenseList[page * 5 + idx];
 		if (!expense) {

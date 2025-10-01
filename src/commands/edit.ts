@@ -7,6 +7,8 @@ import { formatCurrency } from '../utils/currency';
 import { DEFAULT_CURRENCY } from '../utils/currency-constants';
 import { parseEnhancedSplits } from '../utils/split-parser';
 import { logger } from '../utils/logger';
+import { Money } from '../utils/money';
+import * as expenseService from '../services/expense';
 
 export async function handleEdit(ctx: Context, db: Database) {
 	const message = ctx.message?.text || '';
@@ -47,34 +49,29 @@ export async function handleEdit(ctx: Context, db: Database) {
 	const groupId = ctx.chat?.id.toString();
 
 	try {
-		// Get expense details
-		const expense = await withRetry(async () => {
-			const result = await db
-				.select({
-					id: expenses.id,
-					amount: expenses.amount,
-					currency: expenses.currency,
-					description: expenses.description,
-					category: expenses.category,
-					notes: expenses.notes,
-					paidBy: expenses.paidBy,
-					createdBy: expenses.createdBy,
-					groupId: expenses.groupId,
-					isPersonal: expenses.isPersonal,
-					payerUsername: users.username,
-					payerFirstName: users.firstName,
-				})
-				.from(expenses)
-				.innerJoin(users, eq(expenses.paidBy, users.telegramId))
-				.where(and(eq(expenses.id, expenseId), eq(expenses.deleted, false)))
-				.limit(1);
-			return result[0];
-		});
+		// Get expense using service layer
+		const expense = await expenseService.getExpenseById(db, expenseId);
 
 		if (!expense) {
 			await reply(ctx, '❌ Expense not found');
 			return;
 		}
+
+		// Ensure it's from the right group context
+		if (expense.groupId !== groupId) {
+			await reply(ctx, '❌ Expense not found');
+			return;
+		}
+
+		// Get payer info for display
+		const payer = await withRetry(async () => {
+			const result = await db
+				.select({ username: users.username, firstName: users.firstName })
+				.from(users)
+				.where(eq(users.telegramId, expense.paidBy))
+				.limit(1);
+			return result[0];
+		});
 
 		// Check permissions - only creator or payer can edit
 		if (expense.createdBy !== userId && expense.paidBy !== userId) {
@@ -104,39 +101,8 @@ export async function handleEdit(ctx: Context, db: Database) {
 					return;
 				}
 
-				await withRetry(async () => {
-					await db
-						.update(expenses)
-						.set({ amount: formatAmount(newAmount) })
-						.where(eq(expenses.id, expenseId));
-				});
-
-				// If not personal, update splits proportionally
-				if (!expense.isPersonal) {
-					const ratio = newAmount / currentAmount;
-
-					await withRetry(async () => {
-						// Get existing splits
-						const splits = await db
-							.select({
-								userId: expenseSplits.userId,
-								amount: expenseSplits.amount,
-							})
-							.from(expenseSplits)
-							.where(eq(expenseSplits.expenseId, expenseId));
-
-						// Update each split
-						for (const split of splits) {
-							const oldSplitAmount = parseDecimal(split.amount);
-							const newSplitAmount = oldSplitAmount * ratio;
-
-							await db
-								.update(expenseSplits)
-								.set({ amount: formatAmount(newSplitAmount) })
-								.where(and(eq(expenseSplits.expenseId, expenseId), eq(expenseSplits.userId, split.userId)));
-						}
-					});
-				}
+				// Use service layer with transaction support for atomicity
+				await expenseService.updateExpenseAmount(db, expenseId, new Money(newAmount));
 
 				updateMessage = `✅ Amount updated from ${formatCurrency(currentAmount, expense.currency || DEFAULT_CURRENCY)} to ${formatCurrency(newAmount, expense.currency || DEFAULT_CURRENCY)}`;
 				break;
@@ -149,9 +115,7 @@ export async function handleEdit(ctx: Context, db: Database) {
 					return;
 				}
 
-				await withRetry(async () => {
-					await db.update(expenses).set({ description: newDescription }).where(eq(expenses.id, expenseId));
-				});
+				await expenseService.updateExpense(db, expenseId, { description: newDescription });
 
 				updateMessage = `✅ Description updated to "${newDescription}"`;
 				break;
@@ -176,9 +140,7 @@ export async function handleEdit(ctx: Context, db: Database) {
 					return;
 				}
 
-				await withRetry(async () => {
-					await db.update(expenses).set({ category: newCategory }).where(eq(expenses.id, expenseId));
-				});
+				await expenseService.updateExpense(db, expenseId, { category: newCategory });
 
 				updateMessage = `✅ Category updated to "${newCategory}"`;
 				break;
@@ -187,12 +149,7 @@ export async function handleEdit(ctx: Context, db: Database) {
 			case 'notes': {
 				const newNote = value.trim();
 
-				await withRetry(async () => {
-					await db
-						.update(expenses)
-						.set({ notes: newNote || null })
-						.where(eq(expenses.id, expenseId));
-				});
+				await expenseService.updateExpense(db, expenseId, { note: newNote || undefined });
 
 				updateMessage = newNote ? `✅ Note updated to "${newNote}"` : `✅ Note removed`;
 				break;
@@ -220,40 +177,34 @@ export async function handleEdit(ctx: Context, db: Database) {
 					return;
 				}
 
-				await withRetry(async () => {
-					// Delete old splits
-					await db.delete(expenseSplits).where(eq(expenseSplits.expenseId, expenseId));
+				// Resolve usernames to user IDs (presentation logic)
+				const { splits } = parsedSplits;
+				const resolvedSplits: Array<{ userId: string; amount: Money }> = [];
 
-					// Add new splits
-					const { splits } = parsedSplits;
-					const splitEntries: Array<{ userId: string; amount: number }> = [];
+				for (const [mention, splitInfo] of splits) {
+					const username = mention.substring(1);
+					const user = await withRetry(async () => {
+						const result = await db.select({ telegramId: users.telegramId }).from(users).where(eq(users.username, username)).limit(1);
+						return result[0];
+					});
 
-					for (const [mention, splitInfo] of splits) {
-						// Resolve username to user ID
-						const username = mention.substring(1);
-						const user = await db.select({ telegramId: users.telegramId }).from(users).where(eq(users.username, username)).limit(1);
-
-						if (user[0]) {
-							splitEntries.push({
-								userId: user[0].telegramId,
-								amount: splitInfo.value,
-							});
-						}
+					if (user) {
+						resolvedSplits.push({
+							userId: user.telegramId,
+							amount: new Money(splitInfo.value),
+						});
 					}
+				}
 
-					// Insert new splits
-					if (splitEntries.length > 0) {
-						await db.insert(expenseSplits).values(
-							splitEntries.map((split) => ({
-								expenseId: expenseId,
-								userId: split.userId,
-								amount: formatAmount(split.amount),
-							})),
-						);
-					}
+				if (resolvedSplits.length === 0) {
+					await reply(ctx, '❌ No valid users found in mentions');
+					return;
+				}
 
-					updateMessage = `✅ Splits updated for ${splitEntries.length} participants`;
-				});
+				// Use service layer with transaction support for atomicity
+				await expenseService.updateExpenseSplits(db, expenseId, resolvedSplits);
+
+				updateMessage = `✅ Splits updated for ${resolvedSplits.length} participants`;
 				break;
 			}
 
@@ -263,7 +214,7 @@ export async function handleEdit(ctx: Context, db: Database) {
 		}
 
 		// Show update confirmation
-		const payerName = expense.payerUsername || expense.payerFirstName || 'Unknown';
+		const payerName = payer?.username || payer?.firstName || 'Unknown';
 		await reply(
 			ctx,
 			`${updateMessage}\n\n` +
@@ -297,30 +248,24 @@ export async function handleEditCallback(ctx: Context, db: Database, expenseId: 
 	await ctx.answerCallbackQuery();
 
 	try {
-		const expense = await withRetry(async () => {
-			const result = await db
-				.select({
-					id: expenses.id,
-					amount: expenses.amount,
-					currency: expenses.currency,
-					description: expenses.description,
-					category: expenses.category,
-					payerUsername: users.username,
-					payerFirstName: users.firstName,
-				})
-				.from(expenses)
-				.innerJoin(users, eq(expenses.paidBy, users.telegramId))
-				.where(and(eq(expenses.id, expenseId), eq(expenses.deleted, false)))
-				.limit(1);
-			return result[0];
-		});
+		const expense = await expenseService.getExpenseById(db, expenseId);
 
 		if (!expense) {
 			await ctx.reply('❌ Expense not found');
 			return;
 		}
 
-		const payerName = expense.payerUsername || expense.payerFirstName || 'Unknown';
+		// Get payer info for display
+		const payer = await withRetry(async () => {
+			const result = await db
+				.select({ username: users.username, firstName: users.firstName })
+				.from(users)
+				.where(eq(users.telegramId, expense.paidBy))
+				.limit(1);
+			return result[0];
+		});
+
+		const payerName = payer?.username || payer?.firstName || 'Unknown';
 		const amount = parseDecimal(expense.amount);
 
 		await ctx.reply(

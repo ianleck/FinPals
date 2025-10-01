@@ -1,11 +1,12 @@
 import { Context } from 'grammy';
-import { eq, and, sql, inArray } from 'drizzle-orm';
+import { eq, and, inArray } from 'drizzle-orm';
 import { type Database, withRetry } from '../db';
-import { users, groupMembers, expenses, expenseSplits, settlements } from '../db/schema';
+import { users, groupMembers } from '../db/schema';
 import { ERROR_MESSAGES } from '../utils/constants';
 import { reply } from '../utils/reply';
 import { Money, parseMoney, formatMoney } from '../utils/money';
 import { logger } from '../utils/logger';
+import * as settlementService from '../services/settlement';
 
 export async function handleSettle(ctx: Context, db: Database) {
 	// Only work in group chats
@@ -89,17 +90,15 @@ export async function handleSettle(ctx: Context, db: Database) {
 		const toUsername = groupMember.username || groupMember.firstName || 'User';
 
 		// Calculate current balance between users
-		const netBalance = await calculateNetBalance(db, groupId, fromUserId, toUserId);
+		const netBalance = await settlementService.calculateNetBalance(db, groupId, fromUserId, toUserId);
 
-		// Create settlement
-		await withRetry(async () => {
-			await db.insert(settlements).values({
-				groupId: groupId,
-				fromUser: fromUserId,
-				toUser: toUserId,
-				amount: amount.toDatabase(),
-				createdBy: fromUserId,
-			});
+		// Create settlement using service
+		await settlementService.createSettlement(db, {
+			groupId,
+			fromUser: fromUserId,
+			toUser: toUserId,
+			amount,
+			createdBy: fromUserId,
 		});
 
 		// Calculate new balance
@@ -144,56 +143,6 @@ export async function handleSettle(ctx: Context, db: Database) {
 	} catch {
 		await reply(ctx, ERROR_MESSAGES.DATABASE_ERROR);
 	}
-}
-
-async function calculateNetBalance(db: Database, groupId: string, userId1: string, userId2: string): Promise<Money> {
-	return await withRetry(async () => {
-		// Get expenses where user1 paid and user2 owes
-		const user1PaidExpenses = await db
-			.select({
-				amount: sql<string>`SUM(${expenseSplits.amount})`,
-			})
-			.from(expenses)
-			.innerJoin(expenseSplits, eq(expenses.id, expenseSplits.expenseId))
-			.where(
-				and(eq(expenses.groupId, groupId), eq(expenses.deleted, false), eq(expenses.paidBy, userId1), eq(expenseSplits.userId, userId2)),
-			);
-
-		// Get expenses where user2 paid and user1 owes
-		const user2PaidExpenses = await db
-			.select({
-				amount: sql<string>`SUM(${expenseSplits.amount})`,
-			})
-			.from(expenses)
-			.innerJoin(expenseSplits, eq(expenses.id, expenseSplits.expenseId))
-			.where(
-				and(eq(expenses.groupId, groupId), eq(expenses.deleted, false), eq(expenses.paidBy, userId2), eq(expenseSplits.userId, userId1)),
-			);
-
-		// Get settlements from user1 to user2
-		const user1ToUser2Settlements = await db
-			.select({
-				amount: sql<string>`SUM(${settlements.amount})`,
-			})
-			.from(settlements)
-			.where(and(eq(settlements.groupId, groupId), eq(settlements.fromUser, userId1), eq(settlements.toUser, userId2)));
-
-		// Get settlements from user2 to user1
-		const user2ToUser1Settlements = await db
-			.select({
-				amount: sql<string>`SUM(${settlements.amount})`,
-			})
-			.from(settlements)
-			.where(and(eq(settlements.groupId, groupId), eq(settlements.fromUser, userId2), eq(settlements.toUser, userId1)));
-
-		const user1Paid = Money.fromDatabase(user1PaidExpenses[0]?.amount || '0');
-		const user2Paid = Money.fromDatabase(user2PaidExpenses[0]?.amount || '0');
-		const user1Settled = Money.fromDatabase(user1ToUser2Settlements[0]?.amount || '0');
-		const user2Settled = Money.fromDatabase(user2ToUser1Settlements[0]?.amount || '0');
-
-		// Net balance: positive means user2 owes user1, negative means user1 owes user2
-		return user1Paid.subtract(user1Settled).subtract(user2Paid.subtract(user2Settled));
-	});
 }
 
 export async function showUnsettledBalances(ctx: Context, db: Database) {
@@ -290,15 +239,13 @@ export async function handleSettleCallback(ctx: Context, db: Database) {
 	const owerName = owerUser?.username || owerUser?.firstName || 'User';
 	const owedName = owedUser?.username || owedUser?.firstName || 'User';
 
-	// Record the settlement
-	await withRetry(async () => {
-		await db.insert(settlements).values({
-			groupId: groupId,
-			fromUser: owerId,
-			toUser: owedId,
-			amount: amount.toDatabase(),
-			createdBy: currentUserId,
-		});
+	// Record the settlement using service
+	await settlementService.createSettlement(db, {
+		groupId,
+		fromUser: owerId,
+		toUser: owedId,
+		amount,
+		createdBy: currentUserId,
 	});
 
 	// Update the message based on who is settling
@@ -373,7 +320,7 @@ async function handlePartialSettlement(ctx: Context, db: Database, mention: stri
 		const toUsername = groupMember.username || groupMember.firstName || 'User';
 
 		// Get current balance
-		const netBalance = await calculateNetBalance(db, groupId, fromUserId, toUserId);
+		const netBalance = await settlementService.calculateNetBalance(db, groupId, fromUserId, toUserId);
 
 		if (netBalance.abs().isLessThan(new Money(0.01))) {
 			await reply(ctx, `✅ You're already settled up with @${toUsername}!`);

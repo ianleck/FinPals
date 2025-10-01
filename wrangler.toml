@@ -37,6 +37,12 @@ bindings = [
 tag = "0001_session_do"
 new_sqlite_classes = ["SessionDO"]
 
+# KV Namespace for API caching and idempotency
+[[kv_namespaces]]
+binding = "KV"
+id = "c6123f79f2ac49e6aae58900af82bc22"
+preview_id = "6ff1bf37dc1b4f3596eb9c0de8c75109"
+
 # Hyperdrive configuration for CockroachDB
 [[hyperdrive]]
 binding = "HYPERDRIVE"

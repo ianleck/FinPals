@@ -4,6 +4,7 @@ import { type Database, withRetry, parseDecimal } from '../db';
 import { expenses, users } from '../db/schema';
 import { ERROR_MESSAGES } from '../utils/constants';
 import { logger } from '../utils/logger';
+import * as expenseService from '../services/expense';
 
 export async function handleDelete(ctx: Context, db: Database) {
 	// Only work in group chats
@@ -94,25 +95,10 @@ export async function handleDelete(ctx: Context, db: Database) {
 	const expenseId = args[0];
 
 	try {
-		// Check if expense exists and user has permission to delete
-		const expense = await withRetry(async () => {
-			const result = await db
-				.select({
-					id: expenses.id,
-					description: expenses.description,
-					amount: expenses.amount,
-					createdBy: expenses.createdBy,
-					username: users.username,
-					firstName: users.firstName,
-				})
-				.from(expenses)
-				.innerJoin(users, eq(expenses.createdBy, users.telegramId))
-				.where(and(eq(expenses.id, expenseId), eq(expenses.groupId, groupId), eq(expenses.deleted, false)))
-				.limit(1);
-			return result[0];
-		});
+		// Get expense using service layer
+		const expense = await expenseService.getExpenseById(db, expenseId);
 
-		if (!expense) {
+		if (!expense || expense.groupId !== groupId) {
 			await ctx.reply('❌ Expense not found or already deleted.');
 			return;
 		}
@@ -129,15 +115,22 @@ export async function handleDelete(ctx: Context, db: Database) {
 		}
 
 		if (!isCreator && !isAdmin) {
-			const creatorName = expense.username || expense.firstName || 'Unknown';
+			// Lazy-load creator info only for error message
+			const creator = await withRetry(async () => {
+				const result = await db
+					.select({ username: users.username, firstName: users.firstName })
+					.from(users)
+					.where(eq(users.telegramId, expense.createdBy))
+					.limit(1);
+				return result[0];
+			});
+			const creatorName = creator?.username || creator?.firstName || 'Unknown';
 			await ctx.reply(`❌ Only @${creatorName} (who created this expense) or group admins can delete it.`);
 			return;
 		}
 
-		// Soft delete the expense
-		await withRetry(async () => {
-			await db.update(expenses).set({ deleted: true }).where(eq(expenses.id, expenseId));
-		});
+		// Delete expense using service layer
+		await expenseService.deleteExpense(db, expenseId);
 
 		const amount = parseDecimal(expense.amount);
 		await ctx.reply(
