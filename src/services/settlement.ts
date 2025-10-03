@@ -14,6 +14,7 @@ export type Settlement = {
 	fromUser: string;
 	toUser: string;
 	amount: string;
+	currency: string;
 	createdAt: Date;
 	createdBy: string;
 };
@@ -23,22 +24,25 @@ export type CreateSettlementData = {
 	fromUser: string;
 	toUser: string;
 	amount: Money;
+	currency: string;
 	createdBy: string;
 };
 
 /**
- * Calculate net balance between two users
+ * Calculate net balance between two users for a specific currency
  * Positive means user2 owes user1, negative means user1 owes user2
  * EXTRACTED from calculateNetBalance (settle.ts lines 149-197)
+ * UPDATED: Now filters by currency to support multi-currency settlements
  */
 export async function calculateNetBalance(
 	db: Database,
 	groupId: string,
 	userId1: string,
 	userId2: string,
+	currency: string,
 ): Promise<Money> {
 	return await withRetry(async () => {
-		// Get expenses where user1 paid and user2 owes
+		// Get expenses where user1 paid and user2 owes (filtered by currency)
 		const user1PaidExpenses = await db
 			.select({
 				amount: sql<string>`SUM(${expenseSplits.amount})`,
@@ -46,10 +50,16 @@ export async function calculateNetBalance(
 			.from(expenses)
 			.innerJoin(expenseSplits, eq(expenses.id, expenseSplits.expenseId))
 			.where(
-				and(eq(expenses.groupId, groupId), eq(expenses.deleted, false), eq(expenses.paidBy, userId1), eq(expenseSplits.userId, userId2)),
+				and(
+					eq(expenses.groupId, groupId),
+					eq(expenses.deleted, false),
+					eq(expenses.currency, currency),
+					eq(expenses.paidBy, userId1),
+					eq(expenseSplits.userId, userId2),
+				),
 			);
 
-		// Get expenses where user2 paid and user1 owes
+		// Get expenses where user2 paid and user1 owes (filtered by currency)
 		const user2PaidExpenses = await db
 			.select({
 				amount: sql<string>`SUM(${expenseSplits.amount})`,
@@ -57,24 +67,44 @@ export async function calculateNetBalance(
 			.from(expenses)
 			.innerJoin(expenseSplits, eq(expenses.id, expenseSplits.expenseId))
 			.where(
-				and(eq(expenses.groupId, groupId), eq(expenses.deleted, false), eq(expenses.paidBy, userId2), eq(expenseSplits.userId, userId1)),
+				and(
+					eq(expenses.groupId, groupId),
+					eq(expenses.deleted, false),
+					eq(expenses.currency, currency),
+					eq(expenses.paidBy, userId2),
+					eq(expenseSplits.userId, userId1),
+				),
 			);
 
-		// Get settlements from user1 to user2
+		// Get settlements from user1 to user2 (filtered by currency)
 		const user1ToUser2Settlements = await db
 			.select({
 				amount: sql<string>`SUM(${settlements.amount})`,
 			})
 			.from(settlements)
-			.where(and(eq(settlements.groupId, groupId), eq(settlements.fromUser, userId1), eq(settlements.toUser, userId2)));
+			.where(
+				and(
+					eq(settlements.groupId, groupId),
+					eq(settlements.currency, currency),
+					eq(settlements.fromUser, userId1),
+					eq(settlements.toUser, userId2),
+				),
+			);
 
-		// Get settlements from user2 to user1
+		// Get settlements from user2 to user1 (filtered by currency)
 		const user2ToUser1Settlements = await db
 			.select({
 				amount: sql<string>`SUM(${settlements.amount})`,
 			})
 			.from(settlements)
-			.where(and(eq(settlements.groupId, groupId), eq(settlements.fromUser, userId2), eq(settlements.toUser, userId1)));
+			.where(
+				and(
+					eq(settlements.groupId, groupId),
+					eq(settlements.currency, currency),
+					eq(settlements.fromUser, userId2),
+					eq(settlements.toUser, userId1),
+				),
+			);
 
 		const user1Paid = Money.fromDatabase(user1PaidExpenses[0]?.amount || '0');
 		const user2Paid = Money.fromDatabase(user2PaidExpenses[0]?.amount || '0');
@@ -89,6 +119,7 @@ export async function calculateNetBalance(
 /**
  * Create a settlement record
  * EXTRACTED from handleSettle (settle.ts lines 95-103) and handleSettleCallback (lines 294-303)
+ * UPDATED: Now supports multi-currency settlements
  */
 export async function createSettlement(db: Database, data: CreateSettlementData): Promise<Settlement> {
 	return withRetry(async () => {
@@ -99,6 +130,7 @@ export async function createSettlement(db: Database, data: CreateSettlementData)
 				fromUser: data.fromUser,
 				toUser: data.toUser,
 				amount: data.amount.toDatabase(),
+				currency: data.currency,
 				createdBy: data.createdBy,
 			})
 			.returning();

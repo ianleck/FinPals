@@ -582,6 +582,7 @@ export type Settlement = {
 	fromUser: string;
 	toUser: string;
 	amount: string;
+	currency: string;
 	createdAt: Date;
 	createdBy: string;
 };
@@ -591,22 +592,25 @@ export type CreateSettlementData = {
 	fromUser: string;
 	toUser: string;
 	amount: Money;
+	currency: string;
 	createdBy: string;
 };
 
 /**
- * Calculate net balance between two users
+ * Calculate net balance between two users for a specific currency
  * Positive means user2 owes user1, negative means user1 owes user2
  * EXTRACTED from calculateNetBalance (settle.ts lines 149-197)
+ * UPDATED: Now supports multi-currency settlements by filtering all queries by currency
  */
 export async function calculateNetBalance(
 	db: Database,
 	groupId: string,
 	userId1: string,
 	userId2: string,
+	currency: string,
 ): Promise<Money> {
 	return await withRetry(async () => {
-		// Get expenses where user1 paid and user2 owes
+		// Get expenses where user1 paid and user2 owes (filtered by currency)
 		const user1PaidExpenses = await db
 			.select({ amount: sql<string>`SUM(${expenseSplits.amount})` })
 			.from(expenses)
@@ -615,12 +619,13 @@ export async function calculateNetBalance(
 				and(
 					eq(expenses.groupId, groupId),
 					eq(expenses.deleted, false),
+					eq(expenses.currency, currency),
 					eq(expenses.paidBy, userId1),
 					eq(expenseSplits.userId, userId2),
 				),
 			);
 
-		// Get expenses where user2 paid and user1 owes
+		// Get expenses where user2 paid and user1 owes (filtered by currency)
 		const user2PaidExpenses = await db
 			.select({ amount: sql<string>`SUM(${expenseSplits.amount})` })
 			.from(expenses)
@@ -629,30 +634,33 @@ export async function calculateNetBalance(
 				and(
 					eq(expenses.groupId, groupId),
 					eq(expenses.deleted, false),
+					eq(expenses.currency, currency),
 					eq(expenses.paidBy, userId2),
 					eq(expenseSplits.userId, userId1),
 				),
 			);
 
-		// Get settlements from user1 to user2
+		// Get settlements from user1 to user2 (filtered by currency)
 		const user1ToUser2Settlements = await db
 			.select({ amount: sql<string>`SUM(${settlements.amount})` })
 			.from(settlements)
 			.where(
 				and(
 					eq(settlements.groupId, groupId),
+					eq(settlements.currency, currency),
 					eq(settlements.fromUser, userId1),
 					eq(settlements.toUser, userId2),
 				),
 			);
 
-		// Get settlements from user2 to user1
+		// Get settlements from user2 to user1 (filtered by currency)
 		const user2ToUser1Settlements = await db
 			.select({ amount: sql<string>`SUM(${settlements.amount})` })
 			.from(settlements)
 			.where(
 				and(
 					eq(settlements.groupId, groupId),
+					eq(settlements.currency, currency),
 					eq(settlements.fromUser, userId2),
 					eq(settlements.toUser, userId1),
 				),
@@ -671,6 +679,7 @@ export async function calculateNetBalance(
 /**
  * Create a settlement record
  * EXTRACTED from handleSettle (settle.ts lines 95-103) and handleSettleCallback (lines 294-303)
+ * UPDATED: Now supports multi-currency settlements
  */
 export async function createSettlement(db: Database, data: CreateSettlementData): Promise<Settlement> {
 	return withRetry(async () => {
@@ -681,6 +690,7 @@ export async function createSettlement(db: Database, data: CreateSettlementData)
 				fromUser: data.fromUser,
 				toUser: data.toUser,
 				amount: data.amount.toDatabase(),
+				currency: data.currency,
 				createdBy: data.createdBy,
 			})
 			.returning();
@@ -893,6 +903,8 @@ export async function route(request: Request, env: Env, auth: AuthContext): Prom
 	const url = new URL(request.url);
 	const path = url.pathname.replace('/api/v1/expenses', '');
 
+	// Note: CORS and OPTIONS handled by router.ts (centralized approach)
+
 	if (request.method === 'POST' && path === '') {
 		return createExpenseHandler(request, env, auth);
 	}
@@ -953,7 +965,11 @@ async function createExpenseHandler(request: Request, env: Env, auth: AuthContex
 	const response = JSON.stringify(successResponse(expense));
 	await env.KV.put(cacheKey, response, { expirationTtl: 300 });
 
-	return new Response(response, { status: 200 });
+	// Note: CORS headers added by router.ts addCorsHeaders()
+	return new Response(response, {
+		status: 201,
+		headers: { 'Content-Type': 'application/json' },
+	});
 }
 
 async function getExpensesHandler(request: Request, env: Env, auth: AuthContext): Promise<Response> {
@@ -964,15 +980,18 @@ async function getExpensesHandler(request: Request, env: Env, auth: AuthContext)
 	const limit = parseInt(url.searchParams.get('limit') || '20');
 
 	const db = createDb(env);
-	const expenses = await expenseService.getExpenses(db, {
+	const result = await expenseService.getExpenses(db, {
 		groupId,
 		tripId,
 		limit,
 		cursor,
 	});
 
-	return new Response(JSON.stringify(successResponse({ expenses })), {
+	// result = { expenses: [...], nextCursor?: "..." }
+	// Note: CORS headers added by router.ts addCorsHeaders()
+	return new Response(JSON.stringify(successResponse(result)), {
 		status: 200,
+		headers: { 'Content-Type': 'application/json' },
 	});
 }
 
@@ -982,13 +1001,39 @@ function successResponse(data: any) {
 }
 
 function errorResponse(code: string, message: string, status: number) {
+	// Note: CORS headers added by router.ts addCorsHeaders()
 	return new Response(
 		JSON.stringify({
 			ok: false,
 			error: { code, message },
 		}),
-		{ status },
+		{
+			status,
+			headers: { 'Content-Type': 'application/json' },
+		},
 	);
+}
+
+function handleApiError(error: unknown): Response {
+	const message = error instanceof Error ? error.message : 'Unknown error';
+
+	// Check for validation errors
+	if (message.includes('too long') || message.includes('Invalid') || message.includes('required')) {
+		return errorResponse('VALIDATION_ERROR', message, 400);
+	}
+
+	// Check for not found errors
+	if (message.includes('not found')) {
+		return errorResponse('NOT_FOUND', message, 404);
+	}
+
+	// Check for auth errors
+	if (message.includes('not a member') || message.includes('UNAUTHORIZED')) {
+		return errorResponse('FORBIDDEN', message, 403);
+	}
+
+	// Generic server error
+	return errorResponse('INTERNAL_ERROR', 'An unexpected error occurred', 500);
 }
 ```
 
@@ -1125,6 +1170,78 @@ export async function updateExpenseSplits(db: Database, id: string, newSplits) {
 **Why Critical:**
 - Prevents race condition: deletes succeed but inserts fail
 - Ensures expenses never have 0 splits (data integrity)
+
+### Cloudflare Workers Compatibility
+
+**Centralized CORS Architecture (router.ts):**
+
+Instead of adding CORS to every handler, we use a **centralized approach** at the router level:
+
+```typescript
+// src/api/router.ts
+
+const corsHeaders = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'GET, POST, PATCH, DELETE, OPTIONS',
+  'Access-Control-Allow-Headers': 'Content-Type, Authorization, Idempotency-Key, X-Group-ID',
+  'Access-Control-Max-Age': '86400',
+};
+
+export async function handleAPI(request: Request, env: Env): Promise<Response> {
+  // Global OPTIONS handler
+  if (request.method === 'OPTIONS') {
+    return new Response(null, { headers: corsHeaders });
+  }
+
+  try {
+    const auth = await validateTelegramAuth(request, env);
+
+    // ALL responses wrapped with CORS
+    if (path.startsWith('/expenses')) {
+      const response = await expenseHandlers.route(request, env, auth);
+      return addCorsHeaders(response);  // ← Wraps all responses (success + errors)
+    }
+
+    // Router errors also include CORS
+    return errorResponse('NOT_FOUND', 'Endpoint not found', 404);
+  } catch (error) {
+    return handleApiError(error);  // Errors get CORS too
+  }
+}
+
+function addCorsHeaders(response: Response): Response {
+  const newHeaders = new Headers(response.headers);
+  Object.entries(corsHeaders).forEach(([key, value]) => {
+    newHeaders.set(key, value);
+  });
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers: newHeaders,
+  });
+}
+
+function errorResponse(code: string, message: string, status: number): Response {
+  return new Response(JSON.stringify({ ok: false, error: { code, message } }), {
+    status,
+    headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+  });
+}
+```
+
+**Why Centralized Approach:**
+- ✅ DRY (Don't Repeat Yourself) - CORS defined once
+- ✅ ALL responses get CORS automatically (success + errors + not found)
+- ✅ Single source of truth - impossible to forget CORS on new endpoints
+- ✅ Less code to maintain (~50 lines saved vs distributed approach)
+- ✅ Handlers focus on business logic, not cross-origin concerns
+
+**Web Standards Compliance:**
+- ✅ Uses Web Crypto API (not Node.js crypto)
+- ✅ Uses Fetch API (not Node.js http)
+- ✅ Uses URLSearchParams (not Node.js querystring)
+- ✅ Compatible with Cloudflare Workers runtime
+- ✅ No Node.js-specific dependencies
 
 ### Workers-Specific Metrics
 

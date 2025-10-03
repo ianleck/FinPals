@@ -6,6 +6,7 @@ import { ERROR_MESSAGES } from '../utils/constants';
 import { reply } from '../utils/reply';
 import { Money, parseMoney, formatMoney } from '../utils/money';
 import { logger } from '../utils/logger';
+import { DEFAULT_CURRENCY } from '../utils/currency-constants';
 import * as settlementService from '../services/settlement';
 
 export async function handleSettle(ctx: Context, db: Database) {
@@ -89,8 +90,10 @@ export async function handleSettle(ctx: Context, db: Database) {
 		const toUserId = groupMember.telegramId;
 		const toUsername = groupMember.username || groupMember.firstName || 'User';
 
-		// Calculate current balance between users
-		const netBalance = await settlementService.calculateNetBalance(db, groupId, fromUserId, toUserId);
+		// Calculate current balance between users (defaults to DEFAULT_CURRENCY)
+		// TODO: Allow users to specify currency in settle command (e.g., "/settle @user 100 USD")
+		const currency = DEFAULT_CURRENCY;
+		const netBalance = await settlementService.calculateNetBalance(db, groupId, fromUserId, toUserId, currency);
 
 		// Create settlement using service
 		await settlementService.createSettlement(db, {
@@ -98,6 +101,7 @@ export async function handleSettle(ctx: Context, db: Database) {
 			fromUser: fromUserId,
 			toUser: toUserId,
 			amount,
+			currency,
 			createdBy: fromUserId,
 		});
 
@@ -239,12 +243,15 @@ export async function handleSettleCallback(ctx: Context, db: Database) {
 	const owerName = owerUser?.username || owerUser?.firstName || 'User';
 	const owedName = owedUser?.username || owedUser?.firstName || 'User';
 
-	// Record the settlement using service
+	// Record the settlement using service (defaults to DEFAULT_CURRENCY)
+	// TODO: Support multi-currency settlements in callback handler
+	const currency = DEFAULT_CURRENCY;
 	await settlementService.createSettlement(db, {
 		groupId,
 		fromUser: owerId,
 		toUser: owedId,
 		amount,
+		currency,
 		createdBy: currentUserId,
 	});
 
@@ -319,8 +326,10 @@ async function handlePartialSettlement(ctx: Context, db: Database, mention: stri
 		const toUserId = groupMember.telegramId;
 		const toUsername = groupMember.username || groupMember.firstName || 'User';
 
-		// Get current balance
-		const netBalance = await settlementService.calculateNetBalance(db, groupId, fromUserId, toUserId);
+		// Get current balance (defaults to DEFAULT_CURRENCY)
+		// TODO: Support multi-currency balance display
+		const currency = DEFAULT_CURRENCY;
+		const netBalance = await settlementService.calculateNetBalance(db, groupId, fromUserId, toUserId, currency);
 
 		if (netBalance.abs().isLessThan(new Money(0.01))) {
 			await reply(ctx, `✅ You're already settled up with @${toUsername}!`);
